@@ -11,87 +11,35 @@ from streamlit_option_menu import option_menu
 # ----------------- إعدادات الصفحة -----------------
 st.set_page_config(page_title="CO-BODR Engineering Portal", layout="wide", page_icon="🛣️")
 
-# ----------------- تنسيقات CSS (الأنيميشن والكروت) -----------------
+# ----------------- تنسيقات CSS -----------------
 st.markdown("""
     <style>
-    /* أنيميشن كلمة Welcome */
-    .welcome-banner {
-        text-align: center;
-        animation: fadeInScale 1.5s ease-in-out;
-        margin-bottom: 20px;
-    }
-    .welcome-title {
-        font-size: 3.5rem;
-        font-weight: 900;
-        background: -webkit-linear-gradient(45deg, #007bff, #00d2ff);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 10px;
-        letter-spacing: 2px;
-    }
-    .welcome-subtitle {
-        font-size: 1.2rem;
-        color: #6c757d;
-        letter-spacing: 1px;
-    }
-    @keyframes fadeInScale {
-        0% { opacity: 0; transform: translateY(-30px) scale(0.9); }
-        100% { opacity: 1; transform: translateY(0) scale(1); }
-    }
-
-    /* تنسيق الكروت (Cards) */
-    .stCard {
-        background-color: #f8f9fa;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.05);
-        margin-bottom: 20px;
-        border-left: 5px solid #007bff;
-        transition: transform 0.3s;
-    }
-    .stCard:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 6px 12px 0 rgba(0, 0, 0, 0.1);
-    }
-    .metric-card {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.05);
-        text-align: center;
-        border: 1px solid #e9ecef;
-    }
-    .metric-value {
-        font-size: 24px;
-        font-weight: bold;
-        color: #007bff;
-    }
-    .metric-label {
-        font-size: 14px;
-        color: #6c757d;
-    }
+    .welcome-banner { text-align: center; animation: fadeInScale 1.5s ease-in-out; margin-bottom: 20px; }
+    .welcome-title { font-size: 3.5rem; font-weight: 900; background: -webkit-linear-gradient(45deg, #007bff, #00d2ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 10px; letter-spacing: 2px; }
+    .welcome-subtitle { font-size: 1.2rem; color: #6c757d; letter-spacing: 1px; }
+    @keyframes fadeInScale { 0% { opacity: 0; transform: translateY(-30px) scale(0.9); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+    .stCard { background-color: #f8f9fa; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px 0 rgba(0,0,0,0.05); margin-bottom: 20px; border-left: 5px solid #007bff; transition: transform 0.3s; }
+    .stCard:hover { transform: translateY(-5px); box-shadow: 0 6px 12px 0 rgba(0,0,0,0.1); }
+    .metric-card { background-color: #ffffff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px 0 rgba(0,0,0,0.05); text-align: center; border: 1px solid #e9ecef; }
+    .metric-value { font-size: 24px; font-weight: bold; color: #007bff; }
+    .metric-label { font-size: 14px; color: #6c757d; }
+    
+    /* تنسيق خاص للوجو في القائمة الجانبية */
+    .sidebar-logo { font-size: 80px; text-align: center; margin-bottom: -20px; }
     </style>
 """, unsafe_allow_html=True)
 
-# ----------------- تهيئة الذاكرة للتقرير -----------------
-if 'report_data' not in st.session_state:
-    st.session_state.report_data = []
+if 'report_data' not in st.session_state: st.session_state.report_data = []
 
-# ----------------- قواعد البيانات (AASHTO) -----------------
 turning_data = {
-    'Design Vehicle Type': [
-        'Passenger Car', 'Single-Unit Truck', 'Intercity Bus', 'WB-12 Semitrailer', 'WB-20 Semitrailer'
-    ],
+    'Design Vehicle Type': ['Passenger Car', 'Single-Unit Truck', 'Intercity Bus', 'WB-12 Semitrailer', 'WB-20 Semitrailer'],
     'Symbol': ['P', 'SU-12', 'BUS-12', 'WB-12', 'WB-20'],
     'Min Design Turning Radius (m)': [7.26, 15.60, 12.70, 12.16, 13.66],
     'Centerline Radius (CTR) (m)': [6.40, 14.46, 11.53, 10.97, 12.50],
     'Min Inside Radius (m)': [4.39, 11.09, 7.41, 5.88, 0.59]
 }
 df_turning = pd.DataFrame(turning_data)
-vehicle_images = {
-    'P': 'Passenger Car Turning Radius.png', 'SU-12': 'SU-12 Turning Radius.png',
-    'BUS-12': 'BUS-12 Turning Radius.png', 'WB-12': 'WB-12 Turning Radius.png', 'WB-20': 'WB-20 Turning Radius.png'
-}
+vehicle_images = {'P': 'Passenger Car Turning Radius.png', 'SU-12': 'SU-12 Turning Radius.png', 'BUS-12': 'BUS-12 Turning Radius.png', 'WB-12': 'WB-12 Turning Radius.png', 'WB-20': 'WB-20 Turning Radius.png'}
 
 k_values_data = {
     "Crest": {20: 1, 30: 2, 40: 4, 50: 7, 60: 11, 70: 17, 80: 26, 90: 39, 100: 52, 110: 74, 120: 95, 130: 124},
@@ -109,49 +57,38 @@ horizontal_data = {
 }
 df_horizontal = pd.DataFrame(horizontal_data)
 
-# ----------------- دالة إنشاء ملف Word -----------------
 def generate_word_report():
     doc = Document()
     doc.add_heading('CO-BODR - Calculation Note', 0)
-    
     if not st.session_state.report_data:
         doc.add_paragraph("No data added to the report yet.")
         return doc
-
     for item in st.session_state.report_data:
         if item['tool'] == 'K-Value':
             doc.add_heading('1. Vertical Alignment (K-Value)', level=1)
             doc.add_paragraph(f"Curve Type: {item['curve_type']} | Design Speed: {item['speed']} km/h")
             doc.add_paragraph(f"Required Minimum K-Value: {item['k_value']}").bold = True
             doc.add_paragraph("_" * 50)
-            
         elif item['tool'] == 'Turning Radius':
             doc.add_heading('2. Turning Radius Check', level=1)
             doc.add_paragraph(f"Design Vehicle: {item['vehicle_name']} ({item['symbol']})")
             doc.add_paragraph(f"Minimum Design Turning Radius: {item['min_r']} m").bold = True
-            
             img_path = vehicle_images.get(item['symbol'])
-            if img_path and os.path.exists(img_path):
-                doc.add_picture(img_path, width=Inches(5.5))
+            if img_path and os.path.exists(img_path): doc.add_picture(img_path, width=Inches(5.5))
             doc.add_paragraph("_" * 50)
-            
         elif item['tool'] == 'Horizontal Radius':
             doc.add_heading('3. Horizontal Alignment (Low-Speed Urban)', level=1)
             doc.add_paragraph(f"Design Speed: {item['speed']} km/h | Superelevation (e): {item['e_val']}%")
             p = doc.add_paragraph()
             p.add_run(f"Minimum Curve Radius (R): {item['radius']} m").bold = True
-            
             doc.add_heading('AASHTO Table 3-13a (Reference):', level=2)
             table = doc.add_table(rows=1, cols=len(df_horizontal.columns))
             table.style = 'Table Grid'
             hdr_cells = table.rows[0].cells
-            for i, column in enumerate(df_horizontal.columns):
-                hdr_cells[i].text = column if column == 'e (%)' else f"Vd={column}km/h"
-                
+            for i, column in enumerate(df_horizontal.columns): hdr_cells[i].text = column if column == 'e (%)' else f"Vd={column}km/h"
             for index, row in df_horizontal.iterrows():
                 row_cells = table.add_row().cells
-                for i, column in enumerate(df_horizontal.columns):
-                    row_cells[i].text = str(row[column])
+                for i, column in enumerate(df_horizontal.columns): row_cells[i].text = str(row[column])
                 if row['e (%)'] == float(item['e_val']):
                     for cell in row_cells:
                         shading_elm = parse_xml(r'<w:shd {} w:fill="FFCCCC"/>'.format(nsdecls('w')))
@@ -161,8 +98,8 @@ def generate_word_report():
 
 # ----------------- القائمة الجانبية -----------------
 with st.sidebar:
-    # تم تغيير اللوجو إلى أيقونة طريق سريع هندسية مؤكدة
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/Highway_icon.svg/512px-Highway_icon.svg.png", width=120)
+    # استخدام نص CSS كبير كلوجو بدلاً من الروابط الخارجية لضمان ظهوره دائماً
+    st.markdown('<div class="sidebar-logo">🛣️</div>', unsafe_allow_html=True)
     st.title("CO-BODR")
     
     selected_tool = option_menu(
@@ -191,10 +128,7 @@ if selected_tool == "Home":
             <div class="welcome-subtitle">Advanced Highway Design & Calculation Portal</div>
         </div>
     """, unsafe_allow_html=True)
-    
-    # تم تغيير الصورة إلى طريق متعرج احترافي ومؤكد
     st.image("https://images.unsplash.com/photo-1449844908441-8829872d2607?auto=format&fit=crop&w=2000&q=80", use_container_width=True)
-    
     st.write("") 
     st.markdown('<div class="stCard"><h4>Select a tool from the sidebar to begin your AASHTO calculations.</h4></div>', unsafe_allow_html=True)
 
