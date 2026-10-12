@@ -157,4 +157,38 @@ if selected_tool == "Home":
     st.markdown('<div class="stCard"><h4>Select a tool from the sidebar to begin your AASHTO calculations.</h4></div>', unsafe_allow_html=True)
 
 elif selected_tool == "Vertical Curves (K)":
-    st.title("🛣
+    st.title("🛣️ Vertical Curves (K-Value)")
+    col1, col2 = st.columns(2)
+    with col1: curve_type = st.selectbox("Curve Type", ["Crest", "Sag"])
+    with col2: speed = st.selectbox("Design Speed [km/h]", list(k_values_data[curve_type].keys()), index=10)
+    req_k = k_values_data[curve_type][speed]
+    st.markdown(f'<div class="metric-card"><div class="metric-label">Required Minimum K-Value</div><div class="metric-value">{req_k}</div></div>', unsafe_allow_html=True)
+    if st.button("➕ Add to Report", type="primary"):
+        st.session_state.report_data.append({'tool': 'K-Value', 'curve_type': curve_type, 'speed': speed, 'k_value': req_k})
+        st.success("Added to Calculation Note!")
+
+elif selected_tool == "Horizontal Curves (R)":
+    st.title("🔄 Horizontal Curves (Low-Speed Urban)")
+    st.markdown('<div class="stCard"><p>Based on AASHTO Table 3-13a: Minimum Radii for Low-Speed Urban Streets</p></div>', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1: v_design = st.selectbox("Design Speed (Vd) [km/h]", ['20', '30', '40', '50', '60', '70'], index=3)
+    with col2: e_val = st.selectbox("Superelevation (e) [%]", df_horizontal['e (%)'].tolist(), index=6)
+    radius = df_horizontal[df_horizontal['e (%)'] == e_val][v_design].values[0]
+    st.markdown(f'<div class="metric-card"><div class="metric-label">Minimum Curve Radius (R)</div><div class="metric-value">{radius} m</div></div>', unsafe_allow_html=True)
+    if st.button("➕ Add to Report", type="primary"):
+        st.session_state.report_data.append({'tool': 'Horizontal Radius', 'speed': v_design, 'e_val': str(e_val), 'radius': radius})
+        st.success(f"Radius ({radius}m) added to Calculation Note!")
+
+elif selected_tool == "Turning Radius":
+    st.title("📐 Minimum Turning Radius")
+    display_names = df_turning['Design Vehicle Type'] + " (" + df_turning['Symbol'] + ")"
+    selected_display = st.selectbox("Select Design Vehicle:", display_names)
+    selected_symbol = selected_display.split("(")[-1].replace(")", "")
+    v_data = df_turning[df_turning['Symbol'] == selected_symbol].iloc[0]
+    col1, col2, col3 = st.columns(3)
+    with col1: st.markdown(f'<div class="metric-card"><div class="metric-label">Min Radius</div><div class="metric-value">{v_data["Min Design Turning Radius (m)"]} m</div></div>', unsafe_allow_html=True)
+    with col2: st.markdown(f'<div class="metric-card"><div class="metric-label">CTR</div><div class="metric-value">{v_data["Centerline Radius (CTR) (m)"]} m</div></div>', unsafe_allow_html=True)
+    with col3: st.markdown(f'<div class="metric-card"><div class="metric-label">Inside Radius</div><div class="metric-value">{v_data["Min Inside Radius (m)"]} m</div></div>', unsafe_allow_html=True)
+    if st.button("➕ Add to Report", type="primary"):
+        st.session_state.report_data.append({'tool': 'Turning Radius', 'vehicle_name': v_data['Design Vehicle Type'], 'symbol': selected_symbol, 'min_r': v_data['Min Design Turning Radius (m)'], 'ctr': v_data['Centerline Radius (CTR) (m)'], 'inside_r': v_data['Min Inside Radius (m)']})
+        st.success("Added to Calculation Note!")
