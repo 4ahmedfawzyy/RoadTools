@@ -9,18 +9,49 @@ from docx.oxml import parse_xml
 from streamlit_option_menu import option_menu
 
 # ----------------- إعدادات الصفحة -----------------
-st.set_page_config(page_title="Highway Engineering Portal", layout="wide", page_icon="🛣️")
+st.set_page_config(page_title="CO-BODR Engineering Portal", layout="wide", page_icon="🛣️")
 
-# ----------------- تنسيقات CSS -----------------
+# ----------------- تنسيقات CSS (الأنيميشن والكروت) -----------------
 st.markdown("""
     <style>
+    /* أنيميشن كلمة Welcome */
+    .welcome-banner {
+        text-align: center;
+        animation: fadeInScale 1.5s ease-in-out;
+        margin-bottom: 20px;
+    }
+    .welcome-title {
+        font-size: 3.5rem;
+        font-weight: 900;
+        background: -webkit-linear-gradient(45deg, #007bff, #00d2ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 10px;
+        letter-spacing: 2px;
+    }
+    .welcome-subtitle {
+        font-size: 1.2rem;
+        color: #6c757d;
+        letter-spacing: 1px;
+    }
+    @keyframes fadeInScale {
+        0% { opacity: 0; transform: translateY(-30px) scale(0.9); }
+        100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* تنسيق الكروت (Cards) */
     .stCard {
         background-color: #f8f9fa;
         padding: 20px;
         border-radius: 10px;
-        box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.1);
+        box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.05);
         margin-bottom: 20px;
         border-left: 5px solid #007bff;
+        transition: transform 0.3s;
+    }
+    .stCard:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 6px 12px 0 rgba(0, 0, 0, 0.1);
     }
     .metric-card {
         background-color: #ffffff;
@@ -69,7 +100,7 @@ k_values_data = {
     "Sag": {20: 3, 30: 6, 40: 9, 50: 13, 60: 18, 70: 23, 80: 30, 90: 38, 100: 45, 110: 55, 120: 63, 130: 73}
 }
 
-# 3. Horizontal Radius Data (Low-Speed Urban)
+# 3. Horizontal Radius Data
 horizontal_data = {
     'e (%)': [-6.0, -5.0, -4.0, -3.0, -2.0, -1.5, 0.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
     '20': [11, 10, 10, 10, 10, 9, 9, 9, 9, 8, 8, 8, 8, 7, 7, 7, 7, 7, 7],
@@ -84,7 +115,7 @@ df_horizontal = pd.DataFrame(horizontal_data)
 # ----------------- دالة إنشاء ملف Word -----------------
 def generate_word_report():
     doc = Document()
-    doc.add_heading('Highway Engineering - Calculation Note', 0)
+    doc.add_heading('CO-BODR - Calculation Note', 0)
     
     if not st.session_state.report_data:
         doc.add_paragraph("No data added to the report yet.")
@@ -113,7 +144,6 @@ def generate_word_report():
             p = doc.add_paragraph()
             p.add_run(f"Minimum Curve Radius (R): {item['radius']} m").bold = True
             
-            # رسم جدول AASHTO وتظليل الصف
             doc.add_heading('AASHTO Table 3-13a (Reference):', level=2)
             table = doc.add_table(rows=1, cols=len(df_horizontal.columns))
             table.style = 'Table Grid'
@@ -134,13 +164,14 @@ def generate_word_report():
 
 # ----------------- القائمة الجانبية -----------------
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3272/3272089.png", width=100)
-    st.title("Ahmed's Portal")
+    # لوجو طريق احترافي
+    st.image("https://cdn-icons-png.flaticon.com/512/2830/2830305.png", width=120)
+    st.title("CO-BODR")
     
     selected_tool = option_menu(
         menu_title="Main Menu",
         options=["Home", "Vertical Curves (K)", "Horizontal Curves (R)", "Turning Radius"],
-        icons=["house", "bezier2", "circle", "arrow-repeat"],
+        icons=["house", "bezier2", "sign-turn-right", "truck"], # الأيقونات المعبرة
         menu_icon="cast", default_index=0,
         styles={"nav-link-selected": {"background-color": "#007bff"}}
     )
@@ -157,7 +188,18 @@ with st.sidebar:
 
 # ----------------- الصفحات -----------------
 if selected_tool == "Home":
-    st.title("Welcome to Highway Engineering Portal")
+    # تأثيرات الأنيميشن الترحيبية
+    st.markdown("""
+        <div class="welcome-banner">
+            <div class="welcome-title">WELCOME TO CO-BODR</div>
+            <div class="welcome-subtitle">Advanced Highway Design & Calculation Portal</div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # صورة الطريق الاحترافية
+    st.image("https://images.unsplash.com/photo-1515516089376-88db1e26e9c0?q=80&w=2070&auto=format&fit=crop", use_container_width=True)
+    
+    st.write("") # مسافة
     st.markdown('<div class="stCard"><h4>Select a tool from the sidebar to begin your AASHTO calculations.</h4></div>', unsafe_allow_html=True)
 
 elif selected_tool == "Vertical Curves (K)":
@@ -174,16 +216,10 @@ elif selected_tool == "Vertical Curves (K)":
 elif selected_tool == "Horizontal Curves (R)":
     st.title("🔄 Horizontal Curves (Low-Speed Urban)")
     st.markdown('<div class="stCard"><p>Based on AASHTO Table 3-13a: Minimum Radii for Low-Speed Urban Streets</p></div>', unsafe_allow_html=True)
-    
     col1, col2 = st.columns(2)
-    with col1:
-        v_design = st.selectbox("Design Speed (Vd) [km/h]", ['20', '30', '40', '50', '60', '70'], index=3)
-    with col2:
-        e_val = st.selectbox("Superelevation (e) [%]", df_horizontal['e (%)'].tolist(), index=6)
-    
-    # استخراج نصف القطر
+    with col1: v_design = st.selectbox("Design Speed (Vd) [km/h]", ['20', '30', '40', '50', '60', '70'], index=3)
+    with col2: e_val = st.selectbox("Superelevation (e) [%]", df_horizontal['e (%)'].tolist(), index=6)
     radius = df_horizontal[df_horizontal['e (%)'] == e_val][v_design].values[0]
-    
     st.markdown(f'<div class="metric-card"><div class="metric-label">Minimum Curve Radius (R)</div><div class="metric-value">{radius} m</div></div>', unsafe_allow_html=True)
     if st.button("➕ Add to Report", type="primary"):
         st.session_state.report_data.append({'tool': 'Horizontal Radius', 'speed': v_design, 'e_val': str(e_val), 'radius': radius})
@@ -195,12 +231,10 @@ elif selected_tool == "Turning Radius":
     selected_display = st.selectbox("Select Design Vehicle:", display_names)
     selected_symbol = selected_display.split("(")[-1].replace(")", "")
     v_data = df_turning[df_turning['Symbol'] == selected_symbol].iloc[0]
-    
     col1, col2, col3 = st.columns(3)
     with col1: st.markdown(f'<div class="metric-card"><div class="metric-label">Min Radius</div><div class="metric-value">{v_data["Min Design Turning Radius (m)"]} m</div></div>', unsafe_allow_html=True)
     with col2: st.markdown(f'<div class="metric-card"><div class="metric-label">CTR</div><div class="metric-value">{v_data["Centerline Radius (CTR) (m)"]} m</div></div>', unsafe_allow_html=True)
     with col3: st.markdown(f'<div class="metric-card"><div class="metric-label">Inside Radius</div><div class="metric-value">{v_data["Min Inside Radius (m)"]} m</div></div>', unsafe_allow_html=True)
-    
     if st.button("➕ Add to Report", type="primary"):
         st.session_state.report_data.append({'tool': 'Turning Radius', 'vehicle_name': v_data['Design Vehicle Type'], 'symbol': selected_symbol, 'min_r': v_data['Min Design Turning Radius (m)'], 'ctr': v_data['Centerline Radius (CTR) (m)'], 'inside_r': v_data['Min Inside Radius (m)']})
         st.success("Added to Calculation Note!")
