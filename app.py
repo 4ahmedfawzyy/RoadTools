@@ -78,7 +78,6 @@ if 'report_data' not in st.session_state:
     st.session_state.report_data = []
 
 # ----------------- قواعد البيانات (AASHTO) -----------------
-# 1. Turning Radius Data
 turning_data = {
     'Design Vehicle Type': [
         'Passenger Car', 'Single-Unit Truck', 'Intercity Bus', 'WB-12 Semitrailer', 'WB-20 Semitrailer'
@@ -94,13 +93,11 @@ vehicle_images = {
     'BUS-12': 'BUS-12 Turning Radius.png', 'WB-12': 'WB-12 Turning Radius.png', 'WB-20': 'WB-20 Turning Radius.png'
 }
 
-# 2. K-Value Data
 k_values_data = {
     "Crest": {20: 1, 30: 2, 40: 4, 50: 7, 60: 11, 70: 17, 80: 26, 90: 39, 100: 52, 110: 74, 120: 95, 130: 124},
     "Sag": {20: 3, 30: 6, 40: 9, 50: 13, 60: 18, 70: 23, 80: 30, 90: 38, 100: 45, 110: 55, 120: 63, 130: 73}
 }
 
-# 3. Horizontal Radius Data
 horizontal_data = {
     'e (%)': [-6.0, -5.0, -4.0, -3.0, -2.0, -1.5, 0.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
     '20': [11, 10, 10, 10, 10, 9, 9, 9, 9, 8, 8, 8, 8, 7, 7, 7, 7, 7, 7],
@@ -164,14 +161,14 @@ def generate_word_report():
 
 # ----------------- القائمة الجانبية -----------------
 with st.sidebar:
-    # لوجو طريق احترافي
-    st.image("https://cdn-icons-png.flaticon.com/512/2830/2830305.png", width=120)
+    # تم تغيير اللوجو إلى أيقونة طريق سريع هندسية مؤكدة
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/Highway_icon.svg/512px-Highway_icon.svg.png", width=120)
     st.title("CO-BODR")
     
     selected_tool = option_menu(
         menu_title="Main Menu",
         options=["Home", "Vertical Curves (K)", "Horizontal Curves (R)", "Turning Radius"],
-        icons=["house", "bezier2", "sign-turn-right", "truck"], # الأيقونات المعبرة
+        icons=["house", "bezier2", "sign-turn-right", "truck"],
         menu_icon="cast", default_index=0,
         styles={"nav-link-selected": {"background-color": "#007bff"}}
     )
@@ -188,7 +185,6 @@ with st.sidebar:
 
 # ----------------- الصفحات -----------------
 if selected_tool == "Home":
-    # تأثيرات الأنيميشن الترحيبية
     st.markdown("""
         <div class="welcome-banner">
             <div class="welcome-title">WELCOME TO CO-BODR</div>
@@ -196,10 +192,10 @@ if selected_tool == "Home":
         </div>
     """, unsafe_allow_html=True)
     
-    # صورة الطريق الاحترافية
-    st.image("https://images.unsplash.com/photo-1515516089376-88db1e26e9c0?q=80&w=2070&auto=format&fit=crop", use_container_width=True)
+    # تم تغيير الصورة إلى طريق متعرج احترافي ومؤكد
+    st.image("https://images.unsplash.com/photo-1449844908441-8829872d2607?auto=format&fit=crop&w=2000&q=80", use_container_width=True)
     
-    st.write("") # مسافة
+    st.write("") 
     st.markdown('<div class="stCard"><h4>Select a tool from the sidebar to begin your AASHTO calculations.</h4></div>', unsafe_allow_html=True)
 
 elif selected_tool == "Vertical Curves (K)":
