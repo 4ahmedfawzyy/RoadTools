@@ -9,7 +9,7 @@ from docx.oxml import parse_xml
 from streamlit_option_menu import option_menu
 
 # ----------------- إعدادات الصفحة -----------------
-st.set_page_config(page_title="CO-BODR Engineering Portal", layout="wide", page_icon="🛣️")
+st.set_page_config(page_title="CO-BODR Engineering", layout="wide", page_icon="🛣️")
 
 # ----------------- تنسيقات CSS -----------------
 st.markdown("""
@@ -149,7 +149,7 @@ if selected_tool == "Home":
     st.markdown("""
         <div class="welcome-banner">
             <div class="welcome-title">WELCOME TO CO-BODR</div>
-            <div class="welcome-subtitle">Advanced Highway Design & Calculation Portal</div>
+            <div class="welcome-subtitle">Advanced Highway Design & Calculation</div>
         </div>
     """, unsafe_allow_html=True)
     st.image("https://images.unsplash.com/photo-1449844908441-8829872d2607?auto=format&fit=crop&w=2000&q=80", use_container_width=True)
