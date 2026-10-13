@@ -1,220 +1,444 @@
-import streamlit as st
-import pandas as pd
+"""CO-BODR Highway Design Wizard - engine (no Streamlit code in here).
+
+* DATA                  : code tables (AASHTO / Abu Dhabi / MOMRA)
+* get_reference_images  : code-table screenshots with a red rectangle on the selected row
+* draw_section_2d / 3d  : typical cross-section sketches (PNG bytes)
+* build_report          : Word calculation note
+"""
+import datetime
 import io
 import os
-import datetime
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import pandas as pd
 from docx import Document
-from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt
+from matplotlib.patches import Patch, Rectangle
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from PIL import Image, ImageDraw
 
-# ----------------- إعدادات الصفحة -----------------
-st.set_page_config(page_title="CO-BODR Engineering", layout="wide", page_icon="logo.png")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSET_DIRS = [os.path.join(BASE_DIR, "assets"), BASE_DIR]
+ADM = "Abu Dhabi (ADM)"
 
-# ----------------- تنسيقات CSS -----------------
-st.markdown("""
-    <style>
-    .result-box { background-color: #f1f3f5; padding: 15px; border-radius: 8px; text-align: center; margin-top: 10px; border: 1px solid #dee2e6; }
-    .result-value { font-size: 24px; font-weight: bold; color: #007bff; display: block; margin-top: 5px; }
-    .cs-card { background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 12px; border-radius: 5px; margin-bottom: 10px; color: #333; font-weight: 500; }
-    </style>
-""", unsafe_allow_html=True)
+# --------------------------------------------------------------------------
+# DATA
+# --------------------------------------------------------------------------
+_K_CREST = {20: 1, 30: 2, 40: 4, 50: 7, 60: 11, 70: 17, 80: 26, 90: 39, 100: 52, 110: 74, 120: 95, 130: 124}
+_K_SAG = {20: 3, 30: 6, 40: 9, 50: 13, 60: 18, 70: 23, 80: 30, 90: 38, 100: 45, 110: 55, 120: 63, 130: 73}
 
-# ----------------- تهيئة الذاكرة -----------------
-if 'cross_sections' not in st.session_state:
-    st.session_state.cross_sections = []
-
-# ----------------- الداتا الخاصة بالأكواد -----------------
-data = {
+DATA = {
     "AASHTO": {
-        "k_crest": {20: 1, 30: 2, 40: 4, 50: 7, 60: 11, 70: 17, 80: 26, 90: 39, 100: 52, 110: 74, 120: 95, 130: 124},
-        "k_sag": {20: 3, 30: 6, 40: 9, 50: 13, 60: 18, 70: 23, 80: 30, 90: 38, 100: 45, 110: 55, 120: 63, 130: 73},
-        "vehicles": pd.DataFrame({'Name': ['Passenger Car', 'Single-Unit Truck', 'Intercity Bus', 'WB-12', 'WB-20'], 'Symbol': ['P', 'SU-12', 'BUS-12', 'WB-12', 'WB-20'], 'Min_R': [7.26, 15.60, 12.70, 12.16, 13.66], 'Inside_R': [4.39, 11.09, 7.41, 5.88, 0.59]})
+        "k_crest": dict(_K_CREST),
+        "k_sag": dict(_K_SAG),
+        "vehicles": pd.DataFrame({
+            "Name": ["Passenger Car", "Single-Unit Truck", "Intercity Bus", "WB-12", "WB-20"],
+            "Symbol": ["P", "SU-12", "BUS-12", "WB-12", "WB-20"],
+            "Min_R": [7.26, 15.60, 12.70, 12.16, 13.66],
+            "Inside_R": [4.39, 11.09, 7.41, 5.88, 0.59]}),
     },
-    "Abu Dhabi (ADM)": {
-        "k_crest": {20: 1, 30: 2, 40: 4, 50: 7, 60: 11, 70: 17, 80: 26, 90: 39, 100: 52, 110: 74, 120: 95, 130: 124, 140: 161},
-        "k_sag": {20: 3, 30: 6, 40: 9, 50: 13, 60: 18, 70: 23, 80: 30, 90: 38, 100: 45, 110: 55, 120: 63, 130: 73, 140: 84},
-        "vehicles": pd.DataFrame({'Name': ['Passenger Car', 'Single Unit SU-9', 'Single Unit SU-12', 'City Bus', 'WB-12', 'WB-15', 'WB-20'], 'Symbol': ['P', 'SU-9', 'SU-12', 'CITY-BUS', 'WB-12', 'WB-15', 'WB-20'], 'Min_R': [7.26, 12.73, 15.60, 12.50, 12.16, 13.66, 13.66], 'Inside_R': [4.39, 8.64, 11.09, 5.30, 5.88, 5.20, 0.59]})
+    ADM: {
+        "k_crest": {**_K_CREST, 140: 161},
+        "k_sag": {**_K_SAG, 140: 84},
+        # Table 2-8
+        "vehicles": pd.DataFrame({
+            "Name": ["Passenger Car", "Single Unit Truck", "Single Unit Truck", "City Transit Bus",
+                     "Intermediate Semitrailer", "Intermediate Semitrailer", "Interstate Semitrailer",
+                     "Double Trailer Combination"],
+            "Symbol": ["P", "SU-9", "SU-12", "CITY-BUS", "WB-12", "WB-15", "WB-20", "WB-33D"],
+            "Min_R": [7.26, 12.73, 15.60, 12.50, 12.16, 13.66, 13.66, 18.25],
+            "Inside_R": [4.39, 8.64, 11.09, 5.30, 5.88, 5.20, 0.59, 4.19]}),
+        # Table 9-9 (low-speed urban streets, e_max = 4 %)
+        "min_radius": {
+            30: dict(e=4.0, f=0.28, calc=22.1, design=22),
+            40: dict(e=4.0, f=0.23, calc=46.7, design=47),
+            50: dict(e=4.0, f=0.19, calc=85.6, design=86),
+            60: dict(e=4.0, f=0.17, calc=135.0, design=135),
+            70: dict(e=4.0, f=0.15, calc=203.1, design=203)},
+        # Clause 6.2.3
+        "grade": {
+            "uncurbed": dict(label="Uncurbed roadway", value=0.0),
+            "curbed_local": dict(label="Curbed - local road / collector", value=0.2),
+            "curbed_arterial": dict(label="Curbed - arterial / freeway / expressway", value=0.3)},
     },
     "MOMRA": {
-        "k_crest": {30: 2, 40: 4, 50: 7, 60: 11, 70: 17, 80: 26, 90: 39, 100: 52, 110: 74, 120: 95, 130: 124},
-        "k_sag": {30: 6, 40: 9, 50: 13, 60: 18, 70: 23, 80: 30, 90: 38, 100: 45, 110: 55, 120: 63, 130: 73},
-        "vehicles": pd.DataFrame({'Name': ['سيارة ركوب صغيرة', 'شاحنة وحدة مفردة', 'حافلة', 'شاحنة بمقطورة متوسطة', 'شاحنة بمقطورة كبيرة'], 'Symbol': ['P', 'SU', 'BUS-12', 'WB-12', 'WB-20'], 'Min_R': [7.26, 12.73, 12.70, 12.16, 13.66], 'Inside_R': [4.39, 8.64, 7.41, 5.88, 0.59]})
-    }
+        "k_crest": {k: v for k, v in _K_CREST.items() if k >= 30},
+        "k_sag": {k: v for k, v in _K_SAG.items() if k >= 30},
+        "vehicles": pd.DataFrame({
+            "Name": ["سيارة ركوب صغيرة", "شاحنة وحدة مفردة", "حافلة", "شاحنة بمقطورة متوسطة", "شاحنة بمقطورة كبيرة"],
+            "Symbol": ["P", "SU", "BUS-12", "WB-12", "WB-20"],
+            "Min_R": [7.26, 12.73, 12.70, 12.16, 13.66],
+            "Inside_R": [4.39, 8.64, 7.41, 5.88, 0.59]}),
+    },
 }
 
-# خرائط الصور المرجعية
-vehicle_images_map = {
-    'P': ['Min. Turning Radius Passenger Car.png', 'Passenger Car Turning Radius.png'],
-    'SU': ['Min. Turning Radius SU.png'], 'SU-9': ['Min. Turning Radius SU.png'], 'SU-12': ['Min. Turning Radius SU.png', 'SU-12 Turning Radius.png'],
-    'CITY-BUS': ['Min. Turning Radius BUS-12.png'], 'BUS-12': ['Min. Turning Radius BUS-12.png', 'BUS-12 Turning Radius.png'],
-    'WB-12': ['Min. Turning Radius WB-12.png', 'WB-12 Turning Radius.png'],
-    'WB-15': ['Min. Turning Radius WB-20.png'], 'WB-20': ['Min. Turning Radius WB-20.png', 'WB-20 Turning Radius.png'], 'WB-33D': ['Min. Turning Radius WB-20.png']
+# --------------------------------------------------------------------------
+# Screenshots (file names tried in order, in ./assets then next to this file)
+# --------------------------------------------------------------------------
+ADM_FILES = {
+    "k_crest": ["K-Value_Crest.png", "K-Value Crest.png"],
+    "k_sag": ["K-Value_Sag.png", "K-Value Sag.png"],
+    "grade": ["Min__Grade.png", "Min. Grade.png", "Min Grade.png"],
+    "h_radius": ["Min__Horizontal_Radius.png", "Min. Horizontal Radius.png", "Min Horizontal Radius.png"],
+    "turning": ["Turning_Radius.png", "Turning Radius.png"],
 }
 
-k_images_map = {
-    "Abu Dhabi (ADM)": {"crest": "K-Value Crest.png", "sag": "K-Value Sag.png"},
-    "MOMRA": {"crest": "Min. K-Value Crest.png", "sag": "Min. K-Value Sag.png"}
+# Old (un-highlighted) pictures, still used for the other codes until their screenshots are added
+LEGACY_K = {"MOMRA": {"k_crest": "Min. K-Value Crest.png", "k_sag": "Min. K-Value Sag.png"}}
+LEGACY_VEHICLE = {
+    "P": ["Min. Turning Radius Passenger Car.png", "Passenger Car Turning Radius.png"],
+    "SU": ["Min. Turning Radius SU.png"], "SU-9": ["Min. Turning Radius SU.png"],
+    "SU-12": ["Min. Turning Radius SU.png", "SU-12 Turning Radius.png"],
+    "CITY-BUS": ["Min. Turning Radius BUS-12.png"], "BUS-12": ["Min. Turning Radius BUS-12.png", "BUS-12 Turning Radius.png"],
+    "WB-12": ["Min. Turning Radius WB-12.png", "WB-12 Turning Radius.png"],
+    "WB-15": ["Min. Turning Radius WB-20.png"], "WB-20": ["Min. Turning Radius WB-20.png", "WB-20 Turning Radius.png"],
+    "WB-33D": ["Min. Turning Radius WB-20.png"],
 }
 
-st.title("🛣️ CO-BODR Highway Design Wizard")
 
-# ================= STEP 1: SELECT CODE =================
-with st.container(border=True):
-    st.markdown("### 1. Select Design Code (Reference Standard)")
-    selected_code = st.radio("Standard:", ["AASHTO", "Abu Dhabi (ADM)", "MOMRA"], horizontal=True, label_visibility="collapsed")
-    active_data = data[selected_code]
+def find_asset(names):
+    if isinstance(names, str):
+        names = [names]
+    for d in ASSET_DIRS:
+        for n in names:
+            p = os.path.join(d, n)
+            if os.path.exists(p):
+                return p
+    return None
 
-# ================= STEP 2: SELECT SPEED =================
-with st.container(border=True):
-    st.markdown("### 2. Vertical Alignment (K-Values)")
-    speed_options = list(active_data["k_crest"].keys())
-    selected_speed = st.selectbox("Design Speed (km/h):", speed_options)
-    
-    req_k_crest = active_data["k_crest"].get(selected_speed, "N/A")
-    req_k_sag = active_data["k_sag"].get(selected_speed, "N/A")
-    
-    c1, c2 = st.columns(2)
-    c1.markdown(f'<div class="result-box">Required Crest K-Value<span class="result-value">{req_k_crest}</span></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="result-box">Required Sag K-Value<span class="result-value">{req_k_sag}</span></div>', unsafe_allow_html=True)
 
-# ================= STEP 3: SELECT VEHICLE =================
-with st.container(border=True):
-    st.markdown("### 3. Vehicle Turning Radius")
-    df_v = active_data["vehicles"]
-    display_names = df_v['Name'] + " (" + df_v['Symbol'] + ")"
-    selected_v = st.selectbox("Design Vehicle Type:", display_names)
-    
-    v_symbol = selected_v.split("(")[-1].replace(")", "")
-    v_row = df_v[df_v['Symbol'] == v_symbol].iloc[0]
-    
-    c1, c2 = st.columns(2)
-    c1.markdown(f'<div class="result-box">Minimum Design Radius<span class="result-value">{v_row["Min_R"]} m</span></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="result-box">Minimum Inside Radius<span class="result-value">{v_row["Inside_R"]} m</span></div>', unsafe_allow_html=True)
+# --------------------------------------------------------------------------
+# Red-rectangle geometry (pixel coordinates of the Abu Dhabi screenshots)
+# --------------------------------------------------------------------------
+K_SPEEDS = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140]
+_CREST_Y = [105, 128, 150, 172, 195, 217, 239, 261, 283, 306, 328, 350, 372, 395]
+_CREST_X = [22, 133, 276, 396, 524]
+_SAG_Y = [105, 130, 154, 178, 202, 225, 249, 273, 297, 321, 345, 368, 392, 416]
+_SAG_X = [10, 122, 243, 369, 509]
+_TURN_SYMBOLS = ["P", "SU-9", "SU-12", "CITY-BUS", "WB-12", "WB-15", "WB-20", "WB-33D"]
+_TURN_Y = [81, 106, 141, 170, 209, 248, 288, 327, 366]
+_TURN_X = [12, 139, 222, 325, 428, 530]
+_HR_SPEEDS = [30, 40, 50, 60, 70]
+_HR_X = [13, 149, 235, 331, 428, 596, 746]
+_HR_Y0, _HR_H = 104.9, 19.25
+_GRADE_BOXES = {
+    "uncurbed": [(70, 103, 935, 213, 3)],
+    "curbed_local": [(70, 233, 935, 343, 2), (124, 289, 540, 314, 3)],
+    "curbed_arterial": [(70, 233, 935, 343, 2), (544, 289, 932, 314, 3), (124, 321, 258, 343, 3)],
+}
+RED = (214, 0, 0)
 
-# ================= STEP 4: TYPICAL CROSS SECTION =================
-with st.container(border=True):
-    st.markdown("### 4. Typical Cross Sections Builder")
-    cs_name = st.text_input("📝 Cross Section Name (e.g., Main Road):", value="Typical Section 1")
-    
-    col_left, col_mid, col_right = st.columns([1, 0.4, 1])
-    with col_left:
-        st.markdown("#### ⬅️ Left Direction")
-        l_lanes = st.number_input("Drive Lanes (Count)", min_value=0, max_value=6, value=2, key="ll")
-        l_width = st.number_input("Lane Width (m)", min_value=2.0, max_value=4.0, value=3.3, step=0.1, key="lw")
-        l_park = st.number_input("Parking Lane (m)", min_value=0.0, max_value=5.0, value=0.0, step=0.1, key="lp")
-        l_sw = st.number_input("Sidewalk/Shoulder (m)", min_value=0.0, max_value=10.0, value=2.0, step=0.5, key="ls")
-        
-    with col_mid:
-        st.markdown("#### 🟩 Median")
-        median = st.number_input("Median Width (m)", min_value=0.0, max_value=20.0, value=2.0, step=0.5, key="med")
-        
-    with col_right:
-        st.markdown("#### ➡️ Right Direction")
-        r_lanes = st.number_input("Drive Lanes (Count) ", min_value=0, max_value=6, value=2, key="rl")
-        r_width = st.number_input("Lane Width (m) ", min_value=2.0, max_value=4.0, value=3.3, step=0.1, key="rw")
-        r_park = st.number_input("Parking Lane (m) ", min_value=0.0, max_value=5.0, value=0.0, step=0.1, key="rp")
-        r_sw = st.number_input("Sidewalk/Shoulder (m) ", min_value=0.0, max_value=10.0, value=2.0, step=0.5, key="rs")
 
-    l_total = (l_lanes * l_width)
-    r_total = (r_lanes * r_width)
-    total_row = l_sw + l_park + l_total + median + r_total + r_park + r_sw
+def _highlight(path, boxes, scale=3):
+    """Draw red rectangles (x0, y0, x1, y1, thickness) on a screenshot; returns PNG bytes."""
+    im = Image.open(path).convert("RGB")
+    im = im.resize((im.width * scale, im.height * scale), Image.LANCZOS)
+    d = ImageDraw.Draw(im)
+    for x0, y0, x1, y1, t in boxes:
+        d.rectangle([x0 * scale, y0 * scale, x1 * scale, y1 * scale], outline=RED, width=t * 2)
+    out = io.BytesIO()
+    im.save(out, format="PNG")
+    return out.getvalue()
 
-    def build_html_block(width, color, label):
-        if width <= 0: return ""
-        return f'<div style="flex: {width}; background-color: {color}; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,0.2);">{label}<br>{round(width,2)}m</div>'
 
-    # دمج الـ HTML بدون مسافات عشان ميتحولش لـ Code Block
-    diagram_html = '<div style="display: flex; width: 100%; height: 70px; text-align: center; color: white; font-weight: bold; font-family: sans-serif; border-radius: 8px; overflow: hidden; margin-top: 15px; margin-bottom: 15px; font-size: 14px;">' + build_html_block(l_sw, '#95a5a6', 'SW') + build_html_block(l_park, '#f39c12', 'Park') + build_html_block(l_total, '#34495e', 'Lanes') + build_html_block(median, '#2ecc71', 'Med') + build_html_block(r_total, '#34495e', 'Lanes') + build_html_block(r_park, '#f39c12', 'Park') + build_html_block(r_sw, '#95a5a6', 'SW') + '</div>'
-    
-    st.markdown(diagram_html, unsafe_allow_html=True)
-    st.markdown(f"**Total Right-of-Way (ROW) Width: <span style='color:#007bff; font-size: 22px;'>{round(total_row, 2)} m</span>**", unsafe_allow_html=True)
+def _row_boxes(speed, ys, xs, value_col):
+    i = K_SPEEDS.index(speed)
+    y0, y1 = ys[i], ys[i + 1]
+    return [(xs[0] + 1, y0 + 1, xs[-1] - 1, y1 - 1, 2),
+            (xs[value_col] + 2, y0 + 2, xs[value_col + 1] - 2, y1 - 2, 3)]
 
-    if st.button("➕ Save Cross Section to Project"):
-        st.session_state.cross_sections.append({
-            'name': cs_name, 'l_lanes': l_lanes, 'l_width': l_width, 'l_park': l_park, 'l_sw': l_sw,
-            'median': median, 'r_lanes': r_lanes, 'r_width': r_width, 'r_park': r_park, 'r_sw': r_sw, 'total_row': total_row
-        })
-        st.success(f"Section '{cs_name}' saved!")
 
-    if st.session_state.cross_sections:
-        st.markdown("#### 📑 Saved Sections for Report:")
-        for idx, cs in enumerate(st.session_state.cross_sections):
-            st.markdown(f"<div class='cs-card'><b>{idx+1}. {cs['name']}</b> | ROW = {round(cs['total_row'], 2)} m</div>", unsafe_allow_html=True)
-        if st.button("🗑️ Clear All Sections"):
-            st.session_state.cross_sections = []
-            st.rerun()
+def _read(path):
+    with open(path, "rb") as f:
+        return f.read()
 
-# ================= STEP 5: GENERATE REPORT =================
-def create_word_report(p_name, d_name):
-    doc = Document()
-    title = doc.add_heading('Highway Design Calculation Note', 0)
-    title.alignment = 1 
-    doc.add_paragraph(f"Project Name: {p_name}\nDesigned By: {d_name}\nDate: {datetime.datetime.now().strftime('%Y-%m-%d')}\nCode Reference: {selected_code}").alignment = 1
-    doc.add_page_break()
-    
-    # 1. Vertical Alignment
-    doc.add_heading('1. Vertical Alignment (K-Values)', level=1)
-    table_k = doc.add_table(rows=2, cols=3)
-    table_k.style = 'Table Grid'
-    hdr_cells = table_k.rows[0].cells
-    hdr_cells[0].text, hdr_cells[1].text, hdr_cells[2].text = 'Design Speed', 'Crest K-Value', 'Sag K-Value'
-    row_cells = table_k.rows[1].cells
-    row_cells[0].text, row_cells[1].text, row_cells[2].text = f"{selected_speed} km/h", str(req_k_crest), str(req_k_sag)
-    
-    if selected_code in k_images_map:
-        doc.add_paragraph("\nReference Tables from Code:")
-        crest_img = k_images_map[selected_code]["crest"]
-        sag_img = k_images_map[selected_code]["sag"]
-        if os.path.exists(crest_img): doc.add_picture(crest_img, width=Inches(5.0))
-        if os.path.exists(sag_img): doc.add_picture(sag_img, width=Inches(5.0))
-    doc.add_paragraph("_" * 50)
-    
-    # 2. Vehicle Turning Radius
-    doc.add_heading('2. Vehicle Turning Radius', level=1)
-    table_v = doc.add_table(rows=2, cols=3)
-    table_v.style = 'Table Grid'
-    hdr_cells = table_v.rows[0].cells
-    hdr_cells[0].text, hdr_cells[1].text, hdr_cells[2].text = 'Design Vehicle', 'Min Design Radius (m)', 'Min Inside Radius (m)'
-    row_cells = table_v.rows[1].cells
-    row_cells[0].text, row_cells[1].text, row_cells[2].text = f"{v_row['Name']} ({v_row['Symbol']})", str(v_row['Min_R']), str(v_row['Inside_R'])
-    
-    img_names = vehicle_images_map.get(v_symbol, [])
-    for img_name in img_names:
-        if os.path.exists(img_name):
-            doc.add_paragraph("\nVehicle Turning Path Reference:")
-            doc.add_picture(img_name, width=Inches(5.5))
-            break 
-    doc.add_paragraph("_" * 50)
-    
-    # 3. Cross Sections
-    doc.add_heading('3. Typical Cross Sections Details', level=1)
-    if not st.session_state.cross_sections:
-        doc.add_paragraph("No cross sections were added.")
+
+def get_reference_images(code, speed, symbol, grade_key=None):
+    """Returns {key: dict(title, caption, bytes|None, highlighted, missing)} for the report and the UI."""
+    out = {}
+
+    def add(key, title, caption, path, boxes=None, legacy=False):
+        if path is None:
+            out[key] = dict(title=title, caption=caption, bytes=None, highlighted=False,
+                            missing=ADM_FILES.get(key, [""])[0] if code == ADM else "")
+        elif boxes:
+            out[key] = dict(title=title, caption=caption, bytes=_highlight(path, boxes), highlighted=True, missing=None)
+        else:
+            out[key] = dict(title=title, caption=caption, bytes=_read(path), highlighted=False, missing=None)
+
+    if code == ADM:
+        if speed in K_SPEEDS:
+            p = find_asset(ADM_FILES["k_crest"])
+            add("k_crest", "Table 6-2: K Values for Crest Vertical Curves",
+                f"Highlighted: design speed {speed} km/h.", p, _row_boxes(speed, _CREST_Y, _CREST_X, 3) if p else None)
+            p = find_asset(ADM_FILES["k_sag"])
+            add("k_sag", "Table 6-6: K Values for Sag Vertical Curves",
+                f"Highlighted: design speed {speed} km/h.", p, _row_boxes(speed, _SAG_Y, _SAG_X, 3) if p else None)
+        if grade_key in _GRADE_BOXES:
+            p = find_asset(ADM_FILES["grade"])
+            add("grade", "Clause 6.2.3: Minimum Grades", "Highlighted: applicable road type.",
+                p, _GRADE_BOXES[grade_key] if p else None)
+        if speed in _HR_SPEEDS:
+            p = find_asset(ADM_FILES["h_radius"])
+            i = _HR_SPEEDS.index(speed)
+            y0 = _HR_Y0 + _HR_H * i
+            boxes = [(_HR_X[0] + 1, y0, _HR_X[-1] - 1, y0 + _HR_H, 2),
+                     (_HR_X[5] + 2, y0 + 1, _HR_X[6] - 2, y0 + _HR_H - 1, 3)]
+            add("h_radius", "Table 9-9: Minimum Radii on Low-Speed Urban Streets",
+                f"Highlighted: design speed {speed} km/h.", p, boxes if p else None)
+        if symbol in _TURN_SYMBOLS:
+            p = find_asset(ADM_FILES["turning"])
+            i = _TURN_SYMBOLS.index(symbol)
+            y0, y1 = _TURN_Y[i], _TURN_Y[i + 1]
+            boxes = [(_TURN_X[0] + 1, y0 + 1, _TURN_X[-1] - 1, y1 - 1, 2),
+                     (_TURN_X[2] + 2, y0 + 2, _TURN_X[3] - 2, y1 - 2, 3),
+                     (_TURN_X[4] + 2, y0 + 2, _TURN_X[5] - 2, y1 - 2, 3)]
+            add("turning", "Table 2-8: Minimum Turning Radii of Design Vehicles",
+                f"Highlighted: design vehicle {symbol}.", p, boxes if p else None)
     else:
-        for cs in st.session_state.cross_sections:
-            doc.add_heading(f"Section: {cs['name']}", level=2)
-            table_cs = doc.add_table(rows=4, cols=2)
-            table_cs.style = 'Table Grid'
-            table_cs.rows[0].cells[0].text, table_cs.rows[0].cells[1].text = "Left Direction", f"{cs['l_lanes']} Lanes (@ {cs['l_width']}m), Parking: {cs['l_park']}m, SW: {cs['l_sw']}m"
-            table_cs.rows[1].cells[0].text, table_cs.rows[1].cells[1].text = "Median", f"{cs['median']} m"
-            table_cs.rows[2].cells[0].text, table_cs.rows[2].cells[1].text = "Right Direction", f"{cs['r_lanes']} Lanes (@ {cs['r_width']}m), Parking: {cs['r_park']}m, SW: {cs['r_sw']}m"
-            table_cs.rows[3].cells[0].text, table_cs.rows[3].cells[1].text = "Total ROW Width", f"{round(cs['total_row'], 2)} m"
-            doc.add_paragraph("")
-            
+        legacy = LEGACY_K.get(code, {})
+        for key, title in (("k_crest", "Crest K-Value (code reference)"), ("k_sag", "Sag K-Value (code reference)")):
+            if key in legacy:
+                p = find_asset(legacy[key])
+                if p:
+                    add(key, title, "Code reference table.", p)
+        for n in LEGACY_VEHICLE.get(symbol, []):
+            p = find_asset(n)
+            if p:
+                add("turning", "Vehicle Turning Path (code reference)", "Code reference figure.", p)
+                break
+    return out
+
+
+# --------------------------------------------------------------------------
+# Cross-section sketches
+# --------------------------------------------------------------------------
+COLORS = {"sw": "#aab2b8", "park": "#e0a030", "lane": "#3b4450", "median": "#6fbf73"}
+NAMES = {"sw": "Sidewalk / Shoulder", "park": "Parking", "lane": "Lane", "median": "Median"}
+SHORT = {"sw": "SW", "park": "Park", "lane": "Lane", "median": "Median"}
+
+
+def section_items(p):
+    items = [("sw", p["l_sw"]), ("park", p["l_park"])]
+    items += [("lane", p["l_width"])] * int(p["l_lanes"])
+    items.append(("median", p["median"]))
+    items += [("lane", p["r_width"])] * int(p["r_lanes"])
+    items += [("park", p["r_park"]), ("sw", p["r_sw"])]
+    return [(k, w) for k, w in items if w > 0]
+
+
+def section_total(p):
+    return sum(w for _, w in section_items(p))
+
+
+def _to_png(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _empty_fig(msg):
+    fig, ax = plt.subplots(figsize=(8, 1.5))
+    ax.text(0.5, 0.5, msg, ha="center", va="center")
+    ax.axis("off")
+    return _to_png(fig)
+
+
+def draw_section_2d(p):
+    items = section_items(p)
+    W = sum(w for _, w in items)
+    if W <= 0:
+        return _empty_fig("Add at least one element to see the section")
+    fig, ax = plt.subplots(figsize=(12, 3.8), dpi=150)
+    x = 0.0
+    for kind, w in items:
+        h = 0.6 if kind in ("sw", "median") else 0.0
+        ax.add_patch(Rectangle((x, -0.5), w, 0.5 + h, fc=COLORS[kind], ec="#222", lw=0.8))
+        label = SHORT[kind] if w < 2.0 else NAMES[kind]
+        if w >= 1.0:
+            ax.text(x + w / 2, h + 0.12, label, ha="center", va="bottom", fontsize=8, color="#222")
+        # segment dimension
+        ax.annotate("", xy=(x, -0.95), xytext=(x + w, -0.95),
+                    arrowprops=dict(arrowstyle="<->", lw=0.8, color="#555", shrinkA=0, shrinkB=0))
+        ax.text(x + w / 2, -1.05, f"{w:g}", ha="center", va="top", fontsize=8, color="#333")
+        x += w
+    # centre line
+    xcl = p["l_sw"] + p["l_park"] + p["l_lanes"] * p["l_width"] + p["median"] / 2
+    if p["l_lanes"] == 0 or p["r_lanes"] == 0:
+        xcl = None
+    if xcl is not None:
+        ax.plot([xcl, xcl], [-0.5, 1.5], ls="-.", lw=0.9, color="#c0392b")
+        ax.text(xcl, 1.55, "C/L", ha="center", va="bottom", fontsize=8, color="#c0392b")
+    # overall dimension
+    ax.annotate("", xy=(0, -1.95), xytext=(W, -1.95),
+                arrowprops=dict(arrowstyle="<->", lw=1.1, color="#007bff", shrinkA=0, shrinkB=0))
+    ax.text(W / 2, -2.05, f"Total ROW = {W:.2f} m", ha="center", va="top", fontsize=10,
+            color="#007bff", fontweight="bold")
+    ax.text(0, -2.75, "Dimensions in metres. Vertical scale exaggerated.", fontsize=7, color="#777", va="top")
+    ax.set_xlim(-0.5, W + 0.5)
+    ax.set_ylim(-2.9, 2.1)
+    ax.axis("off")
+    return _to_png(fig)
+
+
+def _box(ax, x0, x1, y0, y1, z0, z1, color):
+    v = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+         (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+    faces = [[v[i] for i in f] for f in ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4),
+                                          (2, 3, 7, 6), (1, 2, 6, 5), (0, 3, 7, 4))]
+    ax.add_collection3d(Poly3DCollection(faces, facecolors=color, edgecolors="#222", linewidths=0.4))
+
+
+def draw_section_3d(p, length=18.0):
+    items = section_items(p)
+    W = sum(w for _, w in items)
+    if W <= 0:
+        return _empty_fig("Add at least one element to see the section")
+    fig = plt.figure(figsize=(10, 5.4), dpi=130)
+    ax = fig.add_subplot(111, projection="3d")
+    x, lanes_seen, marks = 0.0, 0, []
+    for i, (kind, w) in enumerate(items):
+        top = 0.45 if kind in ("sw", "median") else 0.0
+        _box(ax, x, x + w, 0, length, -0.3, top, COLORS[kind])
+        x += w
+        if kind == "lane":
+            lanes_seen += 1
+            nxt = items[i + 1][0] if i + 1 < len(items) else None
+            if nxt == "lane":
+                marks.append((x, lanes_seen == p["l_lanes"]))   # (x, opposing directions meet)
+    for mx, solid in marks:                                   # lane markings as thin boxes on top
+        if solid:
+            _box(ax, mx - 0.08, mx + 0.08, 0, length, 0, 0.03, "#f1c40f")
+        else:
+            y = 0.0
+            while y < length:
+                _box(ax, mx - 0.06, mx + 0.06, y, min(y + 1.5, length), 0, 0.03, "white")
+                y += 4.5
+    ax.set_xlim(0, W)
+    ax.set_ylim(0, length)
+    ax.set_zlim(-0.4, 1.0)
+    try:
+        ax.set_box_aspect((W, length, max(2.0, W * 0.12)), zoom=1.5)
+    except TypeError:
+        ax.set_box_aspect((W, length, max(2.0, W * 0.12)))
+    ax.view_init(elev=24, azim=-68)
+    ax.set_axis_off()
+    present = []
+    for k, _ in items:
+        if k not in present:
+            present.append(k)
+    fig.legend(handles=[Patch(fc=COLORS[k], ec="#222", label=NAMES[k]) for k in present],
+               loc="lower center", ncol=len(present), frameon=False, fontsize=9)
+    fig.suptitle(f"Total ROW = {W:.2f} m", fontsize=11, color="#007bff", fontweight="bold")
+    return _to_png(fig)
+
+
+# --------------------------------------------------------------------------
+# Word report
+# --------------------------------------------------------------------------
+def _table(doc, header, rows, widths=None):
+    t = doc.add_table(rows=1, cols=len(header))
+    t.style = "Table Grid"
+    for c, h in zip(t.rows[0].cells, header):
+        c.text = ""
+        run = c.paragraphs[0].add_run(h)
+        run.bold = True
+    for r in rows:
+        cells = t.add_row().cells
+        for c, v in zip(cells, r):
+            c.text = str(v)
+    return t
+
+
+def _picture(doc, data, width, caption=None):
+    doc.add_picture(io.BytesIO(data), width=Inches(width))
+    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if caption:
+        para = doc.add_paragraph()
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = para.add_run(caption)
+        run.italic = True
+        run.font.size = Pt(9)
+
+
+def _add_reference(doc, img):
+    if img is None:
+        return
+    if img["bytes"]:
+        _picture(doc, img["bytes"], 5.9, f"{img['title']} - {img['caption']}")
+    else:
+        doc.add_paragraph(f"[Reference screenshot not found: {img['missing']}]")
+
+
+def build_report(*, project, designer, code, speed, k_crest, k_sag, veh, grade_label, grade_value,
+                 radius, images, sections):
+    doc = Document()
+    sec = doc.sections[0]
+    sec.left_margin = sec.right_margin = Inches(0.9)
+    doc.styles["Normal"].font.name = "Calibri"
+    doc.styles["Normal"].font.size = Pt(11)
+
+    logo = find_asset(["logo.png"])
+    if logo:
+        doc.add_picture(logo, width=Inches(1.3))
+        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_heading("Highway Design Calculation Note", 0).alignment = WD_ALIGN_PARAGRAPH.CENTER
+    info = doc.add_paragraph(f"Project Name: {project}\nDesigned By: {designer}\n"
+                             f"Date: {datetime.datetime.now():%Y-%m-%d}\nCode Reference: {code}")
+    info.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_page_break()
+
+    n = 1
+    doc.add_heading(f"{n}. Vertical Alignment (K-Values)", 1)
+    _table(doc, ["Design Speed", "Crest K-Value", "Sag K-Value"], [[f"{speed} km/h", k_crest, k_sag]])
+    doc.add_paragraph()
+    _add_reference(doc, images.get("k_crest"))
+    _add_reference(doc, images.get("k_sag"))
+
+    if grade_label is not None:
+        n += 1
+        doc.add_heading(f"{n}. Minimum Longitudinal Grade", 1)
+        _table(doc, ["Road Type", "Minimum Grade"], [[grade_label, f"{grade_value:.1f} %"]])
+        doc.add_paragraph()
+        _add_reference(doc, images.get("grade"))
+
+    if radius is not None:
+        n += 1
+        doc.add_heading(f"{n}. Minimum Horizontal Radius", 1)
+        _table(doc, ["Design Speed", "e max", "f max", "Calculated R min (m)", "Design R (m)"],
+               [[f"{speed} km/h", f"{radius['e']:.1f} %", radius["f"], radius["calc"], radius["design"]]])
+        doc.add_paragraph()
+        _add_reference(doc, images.get("h_radius"))
+
+    n += 1
+    doc.add_heading(f"{n}. Vehicle Turning Radius", 1)
+    _table(doc, ["Design Vehicle", "Min Design Radius (m)", "Min Inside Radius (m)"],
+           [[f"{veh['Name']} ({veh['Symbol']})", veh["Min_R"], veh["Inside_R"]]])
+    doc.add_paragraph()
+    _add_reference(doc, images.get("turning"))
+
+    n += 1
+    doc.add_heading(f"{n}. Typical Cross Sections", 1)
+    if not sections:
+        doc.add_paragraph("No cross sections were added.")
+    for cs in sections:
+        doc.add_heading(f"Section: {cs['name']}", 2)
+        _table(doc, ["Element", "Details"], [
+            ["Left Direction", f"{cs['l_lanes']} lanes @ {cs['l_width']} m, parking {cs['l_park']} m, "
+                               f"sidewalk/shoulder {cs['l_sw']} m"],
+            ["Median", f"{cs['median']} m"],
+            ["Right Direction", f"{cs['r_lanes']} lanes @ {cs['r_width']} m, parking {cs['r_park']} m, "
+                                f"sidewalk/shoulder {cs['r_sw']} m"],
+            ["Total ROW Width", f"{cs['total_row']:.2f} m"]])
+        doc.add_paragraph()
+        _picture(doc, cs["png2d"], 6.3, "2D section")
+        _picture(doc, cs["png3d"], 5.2, "3D view")
+
     bio = io.BytesIO()
     doc.save(bio)
     return bio.getvalue()
-
-with st.container(border=True):
-    st.markdown("### 5. Generate Professional Calculation Note")
-    col1, col2 = st.columns(2)
-    proj_name = col1.text_input("Project Name:", value="Highway Design Project")
-    designer_name = col2.text_input("Designed By:", value="Eng. Ahmed Fawzy Aamer Khalifa")
-    
-    st.download_button(
-        label="📄 Download Word Report",
-        data=create_word_report(proj_name, designer_name),
-        file_name="CO_BODR_Report.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        type="primary",
-        use_container_width=True
-    )
