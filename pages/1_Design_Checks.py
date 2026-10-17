@@ -21,11 +21,15 @@ criteria_mode = st.sidebar.radio(
     ["Use Code Standards (AASHTO)", "Manual Custom Entry"]
 )
 
-design_speed = st.sidebar.selectbox("Design Speed (km/h):", [50, 60, 70, 80, 90, 100, 110, 120], index=3)
+# Updated Design Speeds including 20, 30, 40
+design_speed = st.sidebar.selectbox("Design Speed (km/h):", [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], index=6)
 terrain_type = st.sidebar.selectbox("Terrain Type:", ["Level", "Rolling", "Mountainous"])
 
-# AASHTO Simplified Database
+# AASHTO Simplified Database (Updated with Low Speeds)
 aashto_db = {
+    20: {"min_radius": 15, "max_grade": {"Level": 9, "Rolling": 10, "Mountainous": 12}, "k_crest": 1, "k_sag": 3},
+    30: {"min_radius": 25, "max_grade": {"Level": 8, "Rolling": 9, "Mountainous": 11}, "k_crest": 2, "k_sag": 4},
+    40: {"min_radius": 45, "max_grade": {"Level": 7, "Rolling": 8, "Mountainous": 10}, "k_crest": 4, "k_sag": 6},
     50: {"min_radius": 85, "max_grade": {"Level": 6, "Rolling": 7, "Mountainous": 8}, "k_crest": 7, "k_sag": 11},
     60: {"min_radius": 125, "max_grade": {"Level": 5, "Rolling": 6, "Mountainous": 7}, "k_crest": 11, "k_sag": 18},
     70: {"min_radius": 175, "max_grade": {"Level": 4, "Rolling": 5, "Mountainous": 6}, "k_crest": 17, "k_sag": 23},
@@ -42,7 +46,7 @@ default_min_radius = current_standard["min_radius"]
 default_k_crest = current_standard["k_crest"]
 default_k_sag = current_standard["k_sag"]
 
-# Custom vs AASHTO Logic
+# Custom vs AASHTO Logic with formatting to allow easy manual typing
 if criteria_mode == "Manual Custom Entry":
     with st.expander("🛠️ Custom Limits Input", expanded=True):
         col1, col2, col3 = st.columns(3)
