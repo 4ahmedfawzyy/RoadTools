@@ -19,6 +19,24 @@ st.markdown(
     """
     <style>
         [data-testid="stSidebarNav"] { display: none !important; }
+        .block-container { padding-top: 1.6rem; max-width: 1400px; }
+        .hero {
+            background: linear-gradient(135deg, #1F3864 0%, #2E5C9A 100%);
+            padding: 1.5rem 2rem; border-radius: 14px; margin-bottom: 1.4rem;
+            box-shadow: 0 4px 14px rgba(0,0,0,.18);
+        }
+        .hero-title { color: #fff; font-size: 1.9rem; font-weight: 700; line-height: 1.2; }
+        .hero-sub { color: rgba(255,255,255,.85); font-size: .98rem; margin-top: .35rem; }
+        .step-title { display: flex; align-items: center; gap: .65rem; font-size: 1.2rem;
+                      font-weight: 600; margin: .1rem 0 .7rem; }
+        .step-badge { background: #2E5C9A; color: #fff; min-width: 1.8rem; height: 1.8rem; border-radius: 50%;
+                      display: inline-flex; align-items: center; justify-content: center; font-size: .92rem; }
+        .sub-title { font-size: 1rem; font-weight: 600; margin: 1rem 0 .4rem; opacity: .9; }
+        [data-testid="stMetric"] { background: rgba(128,128,128,.08); border: 1px solid rgba(128,128,128,.22);
+                                   border-radius: 10px; padding: .7rem 1rem; }
+        [data-testid="stMetricLabel"] { opacity: .75; }
+        button[data-baseweb="tab"] { font-weight: 600; }
+        .disclaimer { font-size: .8rem; opacity: .65; text-align: center; margin: 2rem 0 .5rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -45,38 +63,39 @@ AASHTO_DB = {
 }
 SPEEDS = list(AASHTO_DB.keys())
 
-st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Design Criteria Settings")
-criteria_mode = st.sidebar.radio("Select Criteria Mode:", ["Use Code Standards (AASHTO)", "Manual Custom Limits"])
+st.sidebar.markdown("## ⚙️ Settings")
 
-manual_limits = {}
-if criteria_mode == "Manual Custom Limits":
-    st.sidebar.info("💡 Enter your custom project design limits:")
-    manual_limits["max_grade"] = st.sidebar.number_input("Max Longitudinal Slope (%)", value=5.0, step=0.5, format="%.2f")
-    manual_limits["min_radius"] = st.sidebar.number_input("Min Horizontal Radius (m)", value=230.0, step=10.0, format="%.2f")
-    manual_limits["min_k_crest"] = st.sidebar.number_input("Min K-Value (Crest)", value=26.0, step=1.0, format="%.2f")
-    manual_limits["min_k_sag"] = st.sidebar.number_input("Min K-Value (Sag)", value=30.0, step=1.0, format="%.2f")
+with st.sidebar.expander("📏 Design criteria", expanded=True):
+    criteria_mode = st.radio("Criteria mode", ["Use Code Standards (AASHTO)", "Manual Custom Limits"])
+    manual_limits = {}
+    if criteria_mode == "Manual Custom Limits":
+        st.caption("Enter your project design limits:")
+        manual_limits["max_grade"] = st.number_input("Max longitudinal slope (%)", value=5.0, step=0.5, format="%.2f")
+        manual_limits["min_radius"] = st.number_input("Min horizontal radius (m)", value=230.0, step=10.0, format="%.2f")
+        manual_limits["min_k_crest"] = st.number_input("Min K-value (crest)", value=26.0, step=1.0, format="%.2f")
+        manual_limits["min_k_sag"] = st.number_input("Min K-value (sag)", value=30.0, step=1.0, format="%.2f")
 
-st.sidebar.markdown("**Optional checks**")
-chk_min_grade = st.sidebar.checkbox("Check minimum grade (drainage)", value=False)
-min_grade_val = st.sidebar.number_input("Min grade (%)", value=0.3, step=0.1, format="%.2f", disabled=not chk_min_grade)
-chk_vc_len = st.sidebar.checkbox("Check min vertical curve length (0.6 × V)", value=True,
-                                 help="Uses the design speed selected in Step 1.")
-break_tol = st.sidebar.number_input("Grade break without curve: flag if A > (%)", value=1.0, step=0.1, format="%.2f")
+with st.sidebar.expander("📈 Vertical alignment checks", expanded=False):
+    chk_min_grade = st.checkbox("Check minimum grade (drainage)", value=False)
+    min_grade_val = st.number_input("Min grade (%)", value=0.3, step=0.1, format="%.2f", disabled=not chk_min_grade)
+    chk_vc_len = st.checkbox("Check min vertical curve length (0.6 × V)", value=True,
+                             help="Uses the design speed selected in Step 1.")
+    break_tol = st.number_input("Grade break without curve: flag if A > (%)", value=1.0, step=0.1, format="%.2f")
 
-st.sidebar.markdown("**Alignment level check**")
-snap_tol = st.sidebar.number_input("Plan snap tolerance (m)", value=0.05, step=0.01, format="%.2f",
-                                   help="Lines closer than this are treated as touching (T-junction endpoints).")
-level_tol = st.sidebar.number_input("Max level difference at intersections (m)", value=0.05, step=0.01, format="%.3f")
-chk_angle = st.sidebar.checkbox("Check intersection angle", value=True)
-min_angle = st.sidebar.number_input("Min intersection angle (°)", value=60.0, step=5.0, min_value=0.0, max_value=180.0,
-                                    format="%.1f", disabled=not chk_angle,
-                                    help="Two crossing alignments form an angle and its supplement (e.g. 70° and 110°). The check passes if either one is inside the range.")
-max_angle = st.sidebar.number_input("Max intersection angle (°)", value=90.0, step=5.0, min_value=0.0, max_value=180.0,
-                                    format="%.1f", disabled=not chk_angle,
-                                    help="Upper limit of the accepted range (up to 180°), e.g. 60° to 120° or 75° to 105°.")
-if chk_angle and min_angle > max_angle:
-    st.sidebar.error("Min angle must not exceed max angle.")
+with st.sidebar.expander("🔀 Intersection checks", expanded=False):
+    snap_tol = st.number_input("Plan snap tolerance (m)", value=0.05, step=0.01, format="%.2f",
+                               help="Lines closer than this are treated as touching (T-junction endpoints).")
+    level_tol = st.number_input("Max level difference (m)", value=0.05, step=0.01, format="%.3f")
+    chk_angle = st.checkbox("Check intersection angle", value=True)
+    min_angle = st.number_input("Min intersection angle (°)", value=60.0, step=5.0, min_value=0.0, max_value=180.0,
+                                format="%.1f", disabled=not chk_angle,
+                                help="Two crossing alignments form an angle and its supplement (e.g. 70° and 110°). "
+                                     "The check passes if either one is inside the range.")
+    max_angle = st.number_input("Max intersection angle (°)", value=90.0, step=5.0, min_value=0.0, max_value=180.0,
+                                format="%.1f", disabled=not chk_angle,
+                                help="Upper limit of the accepted range (up to 180°), e.g. 60° to 120° or 75° to 105°.")
+    if chk_angle and min_angle > max_angle:
+        st.error("Min angle must not exceed max angle.")
 
 
 # ----------------------------------------------------------------------------
@@ -467,14 +486,31 @@ def color_rows(s):
 # ----------------------------------------------------------------------------
 # UI
 # ----------------------------------------------------------------------------
-st.title("🔍 Road Design Review & Checker Tool (LandXML)")
-st.markdown("Independent review of LandXML files (`.xml`) exported from Civil 3D against design standards.")
-st.markdown("---")
+def step_header(num, title):
+    badge = f'<span class="step-badge">{num}</span>' if num else ""
+    st.markdown(f'<div class="step-title">{badge}{title}</div>', unsafe_allow_html=True)
 
-uploaded_file = st.file_uploader("📂 Upload LandXML File (.xml)", type=["xml"])
+
+def count_status(df):
+    if df.empty:
+        return 0, 0
+    return (int(df["Status"].str.startswith("Violation").sum()),
+            int(df["Status"].str.startswith("Warning").sum()))
+
+
+st.markdown(
+    '<div class="hero"><div class="hero-title">🛣️ Road Design Review &amp; Checker</div>'
+    '<div class="hero-sub">Independent review of LandXML files exported from Civil 3D against design standards</div></div>',
+    unsafe_allow_html=True,
+)
+
+with st.container(border=True):
+    step_header("", "📂 Project file")
+    uploaded_file = st.file_uploader("Upload LandXML file (.xml)", type=["xml"], label_visibility="collapsed")
 
 if uploaded_file is None:
-    st.info("💡 Please upload a LandXML (.xml) file exported from Civil 3D to begin the design audit.")
+    st.info("💡 Upload a LandXML (.xml) file exported from Civil 3D to begin. You will then set the design "
+            "criteria and speeds, review the detected intersections, and run the audit.")
     st.stop()
 
 raw = uploaded_file.getvalue()
@@ -500,109 +536,122 @@ names = [a["name"] for a in aligns]
 no_profile = [a["name"] for a in aligns if len(a["pvis"]) < 2]
 no_geom = [a["name"] for a in aligns if geo[a["name"]]["multi"] is None]
 
-st.success(f"✅ Parsed {len(aligns)} alignment(s). Units: {parsed['units']}.")
+inter_rows = find_intersections(aligns, geo, snap_tol)
+inter_df = pd.DataFrame(inter_rows, columns=["Alignment A", "Alignment B", "Easting", "Northing"])
+
+st.caption(f"📄 **{uploaded_file.name}** · {len(raw) / 1024:,.0f} KB")
+m = st.columns(5)
+m[0].metric("Alignments", len(aligns))
+m[1].metric("With design profile", len(aligns) - len(no_profile))
+m[2].metric("Horizontal curves", sum(len(a["hcurves"]) for a in aligns))
+m[3].metric("Intersections", len(inter_df))
+m[4].metric("Units", parsed["units"].split(" ")[0].capitalize())
 if no_profile:
     st.warning("No design profile (ProfAlign) found for: " + ", ".join(no_profile))
 if no_geom:
     st.warning("No horizontal geometry (CoordGeom) found for: " + ", ".join(no_geom))
 
 # --- Step 1: criteria ---------------------------------------------------------
-st.markdown("### ⚙️ Step 1: Design Criteria & Speed Settings")
-if criteria_mode == "Use Code Standards (AASHTO)":
-    terrain = st.selectbox("🌍 Project Terrain Type:", ["Level", "Rolling", "Mountainous"], index=0)
-else:
-    st.info("ℹ️ Using the manual limits from the sidebar. The design speed below is used for the "
-            "minimum vertical curve length check (0.6 × V).")
-
-speed_mode = st.radio("🚦 Design Speed Assignment:",
-                      ["Single Global Speed for All Alignments", "Different Speed for Each Alignment"], horizontal=True)
-if speed_mode.startswith("Single"):
-    gspeed = st.selectbox("Global Design Speed (km/h):", SPEEDS, index=6)
-    speed_map = {n: gspeed for n in names}
-else:
-    speed_key, ver_key = f"speeds_{fhash}", f"speedver_{fhash}"
-    sel_key, bulk_key = f"sel_{fhash}", f"bulk_{fhash}"
-    st.session_state.setdefault(speed_key, {n: 80 for n in names})
-    st.session_state.setdefault(ver_key, 0)
-
-    def _apply_bulk():
-        d = dict(st.session_state[speed_key])
-        for n in st.session_state.get(sel_key, []):
-            d[n] = st.session_state[bulk_key]
-        st.session_state[speed_key] = d
-        st.session_state[ver_key] += 1  # new editor key so the table reloads with the new speeds
-        st.session_state[sel_key] = []
-
-    def _select_all():
-        st.session_state[sel_key] = list(names)
-
-    with st.expander("⚡ Assign one speed to several alignments at once", expanded=True):
-        st.multiselect("Alignments", names, key=sel_key)
-        c1, c2, c3 = st.columns([2, 1, 1])
-        c1.selectbox("Speed (km/h)", SPEEDS, index=6, key=bulk_key)
-        c2.button("Select all", on_click=_select_all, use_container_width=True)
-        c3.button("Apply to selected", on_click=_apply_bulk, type="primary", use_container_width=True)
-
-    cur = st.session_state[speed_key]
-    edited = st.data_editor(
-        pd.DataFrame({"Alignment": names, "Design Speed (km/h)": [cur.get(n, 80) for n in names]}),
-        column_config={"Design Speed (km/h)": st.column_config.SelectboxColumn(options=SPEEDS, required=True)},
-        disabled=["Alignment"], hide_index=True, use_container_width=True,
-        key=f"speed_{fhash}_{st.session_state[ver_key]}",
-    )
-    speed_map = dict(zip(edited["Alignment"], edited["Design Speed (km/h)"]))
-    st.session_state[speed_key] = speed_map  # remember individual edits
-
-
-def get_limits(n):
-    sp = int(speed_map.get(n, 80))
+with st.container(border=True):
+    step_header(1, "Design criteria &amp; speeds")
     if criteria_mode == "Use Code Standards (AASHTO)":
-        std = AASHTO_DB[sp]
-        return {"max_grade": std["max_grade"][terrain], "min_radius": std["min_radius"],
-                "min_k_crest": std["k_crest"], "min_k_sag": std["k_sag"], "speed": sp}
-    return {**manual_limits, "speed": sp}
+        terrain = st.selectbox("🌍 Project terrain type", ["Level", "Rolling", "Mountainous"], index=0)
+    else:
+        st.info("Using the manual limits from the sidebar. The design speed below is used for the "
+                "minimum vertical curve length check (0.6 × V).")
 
+    speed_mode = st.radio("🚦 Design speed assignment",
+                          ["Single Global Speed for All Alignments", "Different Speed for Each Alignment"],
+                          horizontal=True)
+    if speed_mode.startswith("Single"):
+        gspeed = st.selectbox("Global design speed (km/h)", SPEEDS, index=6)
+        speed_map = {n: gspeed for n in names}
+    else:
+        speed_key, ver_key = f"speeds_{fhash}", f"speedver_{fhash}"
+        sel_key, bulk_key = f"sel_{fhash}", f"bulk_{fhash}"
+        st.session_state.setdefault(speed_key, {n: 80 for n in names})
+        st.session_state.setdefault(ver_key, 0)
 
-# --- Applied criteria (shown right after the file is loaded) --------------------
-src_label = f"AASHTO, {terrain} terrain" if criteria_mode == "Use Code Standards (AASHTO)" else "Manual custom limits"
-st.markdown(f"#### 📋 Applied Design Criteria ({src_label})")
-by_speed = {}
-for n in names:
-    by_speed.setdefault(int(speed_map.get(n, 80)), []).append(n)
-crit_rows = []
-for sp in sorted(by_speed):
-    lim = get_limits(by_speed[sp][0])
-    crit_rows.append({
-        "Design Speed (km/h)": sp,
-        "Max Grade (%)": lim["max_grade"],
-        "Min Grade (%)": min_grade_val if chk_min_grade else None,
-        "Min Horizontal Radius (m)": lim["min_radius"],
-        "Min K (Crest)": lim["min_k_crest"],
-        "Min K (Sag)": lim["min_k_sag"],
-        "Min Vertical Curve Length (m)": round(0.6 * sp, 1) if chk_vc_len else None,
-        "Alignments": ", ".join(by_speed[sp]),
-    })
-st.dataframe(pd.DataFrame(crit_rows).style.format(precision=2, na_rep="-"), use_container_width=True, hide_index=True)
-extra = [f"Level difference at intersections ≤ {level_tol} m"]
-if chk_angle:
-    extra.append(f"Intersection angle between {min_angle:.1f}° and {max_angle:.1f}°")
-if chk_min_grade is False:
-    extra.append("Min grade check is off")
-st.caption(" • ".join(extra))
+        def _apply_bulk():
+            d = dict(st.session_state[speed_key])
+            for n in st.session_state.get(sel_key, []):
+                d[n] = st.session_state[bulk_key]
+            st.session_state[speed_key] = d
+            st.session_state[ver_key] += 1  # new editor key so the table reloads with the new speeds
+            st.session_state[sel_key] = []
+
+        def _select_all():
+            st.session_state[sel_key] = list(names)
+
+        with st.expander("⚡ Assign one speed to several alignments at once", expanded=True):
+            st.multiselect("Alignments", names, key=sel_key)
+            c1, c2, c3 = st.columns([2, 1, 1])
+            c1.selectbox("Speed (km/h)", SPEEDS, index=6, key=bulk_key)
+            c2.button("Select all", on_click=_select_all, use_container_width=True)
+            c3.button("Apply to selected", on_click=_apply_bulk, type="primary", use_container_width=True)
+
+        cur = st.session_state[speed_key]
+        edited = st.data_editor(
+            pd.DataFrame({"Alignment": names, "Design Speed (km/h)": [cur.get(n, 80) for n in names]}),
+            column_config={"Design Speed (km/h)": st.column_config.SelectboxColumn(options=SPEEDS, required=True)},
+            disabled=["Alignment"], hide_index=True, use_container_width=True,
+            key=f"speed_{fhash}_{st.session_state[ver_key]}",
+        )
+        speed_map = dict(zip(edited["Alignment"], edited["Design Speed (km/h)"]))
+        st.session_state[speed_key] = speed_map  # remember individual edits
+
+    def get_limits(n):
+        sp = int(speed_map.get(n, 80))
+        if criteria_mode == "Use Code Standards (AASHTO)":
+            std = AASHTO_DB[sp]
+            return {"max_grade": std["max_grade"][terrain], "min_radius": std["min_radius"],
+                    "min_k_crest": std["k_crest"], "min_k_sag": std["k_sag"], "speed": sp}
+        return {**manual_limits, "speed": sp}
+
+    src_label = f"AASHTO, {terrain} terrain" if criteria_mode == "Use Code Standards (AASHTO)" else "Manual custom limits"
+    st.markdown(f'<div class="sub-title">📋 Applied design criteria · {src_label}</div>', unsafe_allow_html=True)
+    by_speed = {}
+    for n in names:
+        by_speed.setdefault(int(speed_map.get(n, 80)), []).append(n)
+    crit_rows = []
+    for sp in sorted(by_speed):
+        lim = get_limits(by_speed[sp][0])
+        crit_rows.append({
+            "Design Speed (km/h)": sp,
+            "Max Grade (%)": lim["max_grade"],
+            "Min Grade (%)": min_grade_val if chk_min_grade else None,
+            "Min Horizontal Radius (m)": lim["min_radius"],
+            "Min K (Crest)": lim["min_k_crest"],
+            "Min K (Sag)": lim["min_k_sag"],
+            "Min Vertical Curve Length (m)": round(0.6 * sp, 1) if chk_vc_len else None,
+            "Alignments": ", ".join(by_speed[sp]),
+        })
+    st.dataframe(pd.DataFrame(crit_rows).style.format(precision=2, na_rep="-"),
+                 use_container_width=True, hide_index=True)
+    extra = [f"Level difference at intersections ≤ {level_tol} m"]
+    if chk_angle:
+        extra.append(f"Intersection angle between {min_angle:.1f}° and {max_angle:.1f}°")
+    if not chk_min_grade:
+        extra.append("Min grade check is off")
+    st.caption(" • ".join(extra))
 
 # --- Step 2: intersections ------------------------------------------------------
-st.markdown("### 🔀 Step 2: At-grade Intersections (level & angle checks)")
-inter_rows = find_intersections(aligns, geo, snap_tol)
-inter_df = pd.DataFrame(inter_rows, columns=["Alignment A", "Alignment B", "Easting", "Northing"])
-if inter_df.empty:
-    st.info("No plan intersections found between alignments.")
-else:
-    st.caption("All detected crossings are treated as at-grade junctions: the two design levels must match "
-               "within the tolerance, and the intersection angle must fall inside the min-max range set in the sidebar.")
-    st.dataframe(inter_df, use_container_width=True, hide_index=True)
+with st.container(border=True):
+    step_header(2, "At-grade intersections")
+    if inter_df.empty:
+        st.info("No plan intersections found between alignments.")
+    else:
+        st.caption("All detected crossings are treated as at-grade junctions: the two design levels must match "
+                   "within the tolerance, and the intersection angle must fall inside the min-max range "
+                   "set in the sidebar.")
+        st.dataframe(inter_df, use_container_width=True, hide_index=True, height=min(300, 38 + 35 * len(inter_df)))
 
 # --- Step 3: run -----------------------------------------------------------------
-if st.button("🚀 Run Design Audit", type="primary"):
+with st.container(border=True):
+    step_header(3, "Run audit")
+    run_clicked = st.button("🚀 Run Design Audit", type="primary", use_container_width=True)
+
+if run_clicked:
     hz, tg, vc = [], [], []
     for a in aligns:
         lim = get_limits(a["name"])
@@ -621,65 +670,89 @@ if st.button("🚀 Run Design Audit", type="primary"):
 
 audit = st.session_state.get("audit")
 if audit:
-    st.markdown("---")
-    st.subheader("📊 Design Check Audit Results")
+    st.markdown("")
+    step_header("", "📊 Audit results")
 
-    all_status = pd.concat([d["Status"] for d in audit.values() if not d.empty], ignore_index=True) \
-        if any(not d.empty for d in audit.values()) else pd.Series(dtype=str)
+    nonempty = [d["Status"] for d in audit.values() if not d.empty]
+    all_status = pd.concat(nonempty, ignore_index=True) if nonempty else pd.Series(dtype=str)
+    n_pass = int((all_status == "Pass").sum())
+    n_warn = int(all_status.str.startswith("Warning").sum())
+    n_viol = int(all_status.str.startswith("Violation").sum())
+
+    if n_viol:
+        st.error(f"**{n_viol} violation(s)** found across {len(all_status)} checks. Review the tabs below.")
+    elif n_warn:
+        st.warning(f"No violations, but **{n_warn} warning(s)** need review.")
+    else:
+        st.success(f"All {len(all_status)} checks passed.")
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total checks", len(all_status))
-    c2.metric("Pass", int((all_status == "Pass").sum()))
-    c3.metric("Warnings", int(all_status.str.startswith("Warning").sum()))
-    c4.metric("Violations", int(all_status.str.startswith("Violation").sum()))
-    only_issues = st.checkbox("Show violations and warnings only", value=False)
+    c2.metric("✅ Pass", n_pass)
+    c3.metric("⚠️ Warnings", n_warn)
+    c4.metric("❌ Violations", n_viol)
+    only_issues = st.toggle("Show violations and warnings only", value=False)
 
-    icons = {"Horizontal Curves": "↔️", "Tangent Grades": "📐", "Vertical Curves": "📈", "Alignment Levels": "🔀", "Intersection Angles": "🧭"}
+    icons = {"Horizontal Curves": "↔️", "Tangent Grades": "📐", "Vertical Curves": "📈",
+             "Alignment Levels": "🔀", "Intersection Angles": "🧭"}
+    labels = []
     for title, df in audit.items():
-        with st.expander(f"{icons[title]} {title} ({len(df)})", expanded=True):
+        nv, nw = count_status(df)
+        labels.append(f"{icons[title]} {title} ({len(df)})" + (f" 🔴{nv}" if nv else "") + (f" 🟡{nw}" if nw else ""))
+    tabs = st.tabs(labels + ["🗺️ Plan view", "📥 Export"])
+
+    for tab, (title, df) in zip(tabs, audit.items()):
+        with tab:
             if df.empty:
                 st.caption("Nothing to check.")
                 continue
             view = df[df["Status"] != "Pass"] if only_issues else df
+            if view.empty:
+                st.success("No violations or warnings in this table.")
+                continue
             st.dataframe(view.style.apply(color_rows, axis=1).format(precision=3, na_rep=""),
                          use_container_width=True, hide_index=True)
 
-    # Plan view
-    fig = go.Figure()
-    for a in aligns:
-        xs = [p[0] for e in a["elems"] for p in e["pts"]]
-        ys = [p[1] for e in a["elems"] for p in e["pts"]]
-        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=a["name"]))
-    marks = {}
-    for tname, label in (("Alignment Levels", "Level"), ("Intersection Angles", "Angle")):
-        for _, r in audit.get(tname, pd.DataFrame(columns=["Status"])).iterrows():
-            m = marks.setdefault((r["Alignment A"], r["Alignment B"], r["Easting"], r["Northing"]),
-                                 {"rank": 0, "lines": []})
-            rank = 2 if r["Status"].startswith("Violation") else 1 if r["Status"].startswith("Warning") else 0
-            m["rank"] = max(m["rank"], rank)
-            m["lines"].append(f"{label}: {r['Status']}")
-    if marks:
-        palette = {0: "#28a745", 1: "#ffc107", 2: "#dc3545"}
-        fig.add_trace(go.Scatter(
-            x=[k[2] for k in marks], y=[k[3] for k in marks], mode="markers", name="Intersections",
-            marker=dict(size=11, color=[palette[m["rank"]] for m in marks.values()],
-                        line=dict(width=1, color="black")),
-            text=[f"{k[0]} × {k[1]}<br>" + "<br>".join(m["lines"]) for k, m in marks.items()],
-            hoverinfo="text"))
-    fig.update_layout(title="Plan view", height=520, yaxis=dict(scaleanchor="x", scaleratio=1),
-                      xaxis_title="Easting (m)", yaxis_title="Northing (m)")
-    st.plotly_chart(fig, use_container_width=True)
+    with tabs[len(audit)]:
+        fig = go.Figure()
+        for a in aligns:
+            xs = [p[0] for e in a["elems"] for p in e["pts"]]
+            ys = [p[1] for e in a["elems"] for p in e["pts"]]
+            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=a["name"]))
+        marks = {}
+        for tname, label in (("Alignment Levels", "Level"), ("Intersection Angles", "Angle")):
+            for _, r in audit.get(tname, pd.DataFrame(columns=["Status"])).iterrows():
+                mk = marks.setdefault((r["Alignment A"], r["Alignment B"], r["Easting"], r["Northing"]),
+                                      {"rank": 0, "lines": []})
+                rank = 2 if r["Status"].startswith("Violation") else 1 if r["Status"].startswith("Warning") else 0
+                mk["rank"] = max(mk["rank"], rank)
+                mk["lines"].append(f"{label}: {r['Status']}")
+        if marks:
+            palette = {0: "#28a745", 1: "#ffc107", 2: "#dc3545"}
+            fig.add_trace(go.Scatter(
+                x=[k[2] for k in marks], y=[k[3] for k in marks], mode="markers", name="Intersections",
+                marker=dict(size=12, color=[palette[v["rank"]] for v in marks.values()],
+                            line=dict(width=1, color="black")),
+                text=[f"{k[0]} × {k[1]}<br>" + "<br>".join(v["lines"]) for k, v in marks.items()],
+                hoverinfo="text"))
+        fig.update_layout(height=600, margin=dict(l=10, r=10, t=30, b=10),
+                          yaxis=dict(scaleanchor="x", scaleratio=1, title="Northing (m)"),
+                          xaxis=dict(title="Easting (m)"),
+                          legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0))
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("Intersection markers: green = pass, amber = warning, red = violation (worst of level and angle checks).")
 
-    # Export
-    st.markdown("---")
-    st.subheader("📥 Export Audit Reports")
-    col1, col2 = st.columns(2)
-    report = "--- LandXML Design Audit Report ---\n(Preliminary check - verify against the governing code.)\n\n"
-    for title, df in audit.items():
-        report += f"{title}:\n" + (df.to_string(index=False) if not df.empty else "none") + "\n\n"
-    col1.download_button("📄 Download Text Report", report, "LandXML_Audit_Report.txt", "text/plain",
-                         use_container_width=True)
-    buf = build_excel(audit)
-    col2.download_button("📊 Download Excel Report", buf.getvalue(), "LandXML_Audit_Report.xlsx",
-                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    with tabs[len(audit) + 1]:
+        report = ("--- LandXML Design Audit Report ---\n(Preliminary check - verify against the governing code.)\n\n")
+        for title, df in audit.items():
+            report += f"{title}:\n" + (df.to_string(index=False) if not df.empty else "none") + "\n\n"
+        col1, col2 = st.columns(2)
+        col1.download_button("📄 Download text report", report, "LandXML_Audit_Report.txt", "text/plain",
+                             use_container_width=True)
+        col2.download_button("📊 Download Excel report", build_excel(audit).getvalue(), "LandXML_Audit_Report.xlsx",
+                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             use_container_width=True, type="primary")
+        st.caption("The Excel report has a summary sheet plus one formatted sheet per check table.")
 
-    st.caption("⚠️ Preliminary check based on simplified criteria. Results must be verified against the governing design code.")
+st.markdown('<div class="disclaimer">⚠️ Preliminary check based on simplified criteria. '
+            'Results must be verified against the governing design code.</div>', unsafe_allow_html=True)
