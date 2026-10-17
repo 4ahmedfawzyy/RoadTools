@@ -10,10 +10,21 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🔍 Road Design Review & Checker Tool")
-st.markdown("An independent engineering tool for reviewing road CAD drawings (DXF) and checking compliance with AASHTO standards or custom project limits.")
+# --- CSS To Hide Default Sidebar Navigation ---
+st.markdown("""
+    <style>
+        /* Hide the default pages navigation list (app, Design Checks, BODR) */
+        [data-testid="stSidebarNav"] {
+            display: none !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- Sidebar / Criteria Settings ---
+# --- Fixed Side Panel (Custom Sidebar) ---
+if st.sidebar.button("🏠 Home", use_container_width=True, type="primary"):
+    st.switch_page("app.py")
+
+st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Design Criteria Settings")
 
 criteria_mode = st.sidebar.radio(
@@ -21,11 +32,10 @@ criteria_mode = st.sidebar.radio(
     ["Use Code Standards (AASHTO)", "Manual Custom Entry"]
 )
 
-# Updated Design Speeds including 20, 30, 40
 design_speed = st.sidebar.selectbox("Design Speed (km/h):", [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], index=6)
 terrain_type = st.sidebar.selectbox("Terrain Type:", ["Level", "Rolling", "Mountainous"])
 
-# AASHTO Simplified Database (Updated with Low Speeds)
+# AASHTO Simplified Database
 aashto_db = {
     20: {"min_radius": 15, "max_grade": {"Level": 9, "Rolling": 10, "Mountainous": 12}, "k_crest": 1, "k_sag": 3},
     30: {"min_radius": 25, "max_grade": {"Level": 8, "Rolling": 9, "Mountainous": 11}, "k_crest": 2, "k_sag": 4},
@@ -46,7 +56,6 @@ default_min_radius = current_standard["min_radius"]
 default_k_crest = current_standard["k_crest"]
 default_k_sag = current_standard["k_sag"]
 
-# Custom vs AASHTO Logic with formatting to allow easy manual typing
 if criteria_mode == "Manual Custom Entry":
     with st.expander("🛠️ Custom Limits Input", expanded=True):
         col1, col2, col3 = st.columns(3)
@@ -68,7 +77,10 @@ else:
     st.sidebar.info(f"📌 **AASHTO Standards Loaded:**\n- Max Grade: {max_grade}%\n- Min Radius: {min_radius}m\n- K-Crest: {min_k_crest}\n- K-Sag: {min_k_sag}")
 
 # --- Main Section: File Upload ---
+st.title("🔍 Road Design Review & Checker Tool")
+st.markdown("An independent engineering tool for reviewing road CAD drawings (DXF) and checking compliance with AASHTO standards or custom project limits.")
 st.markdown("---")
+
 uploaded_file = st.file_uploader("📂 Upload CAD File (.dxf)", type=["dxf"])
 
 if uploaded_file is not None:
@@ -82,8 +94,6 @@ if uploaded_file is not None:
         st.markdown("---")
         st.subheader("📊 Design Check Audit Results")
         
-        # Simulated Data (Now including Profile Name for multiple roads support)
-        # 1. PVI Checks
         pvi_data = [
             {"Profile Name": "Main_Road_01", "Station": 1000.00, "Type": "PVI", "Status": "Pass"},
             {"Profile Name": "Main_Road_01", "Station": 1234.25, "Type": "PVI", "Status": "Warning (Not multiple of 5)"}, 
@@ -92,7 +102,6 @@ if uploaded_file is not None:
         ]
         df_pvi = pd.DataFrame(pvi_data)
 
-        # 2. Slopes & Grades Checks
         tangents_data = [
             {"Profile Name": "Main_Road_01", "Start Station": 1000, "End Station": 1234.25, "Grade (%)": 0.3, "Status": "Warning (Below Min)"}, 
             {"Profile Name": "Main_Road_01", "Start Station": 1234.25, "End Station": 1500, "Grade (%)": 5.8, "Status": "Violation (Exceeds Max)"},   
@@ -100,53 +109,38 @@ if uploaded_file is not None:
         ]
         df_grades = pd.DataFrame(tangents_data)
 
-        # 3. Vertical Curves Checks
         curves_data = [
             {"Profile Name": "Main_Road_01", "Station": 1234.25, "Curve Type": "Crest", "Actual K-Value": 20, "Required K-Value": min_k_crest, "Status": "Violation (Below Min)"},
             {"Profile Name": "Side_Road_A", "Station": 1500.00, "Curve Type": "Sag", "Actual K-Value": 40, "Required K-Value": min_k_sag, "Status": "Violation (Below Min)" if 40 < min_k_sag else "Pass"}
         ]
         df_curves = pd.DataFrame(curves_data)
 
-        # --- Display Results in Expanders ---
-        
-        # PVI Stations Expander
         with st.expander("📌 PVI Stationing Checks", expanded=True):
             st.markdown("#### PVI Stations Divisibility Check (Multiple of 5)")
-            
             def highlight_pvi(s):
                 if "Warning" in s["Status"]: return ['background-color: #fff3cd; color: #856404']*len(s)
                 return ['background-color: #d4edda; color: #155724']*len(s)
-            
             st.dataframe(df_pvi.style.apply(highlight_pvi, axis=1), use_container_width=True, hide_index=True)
 
-        # Grades Expander
         with st.expander("📐 Slopes & Tangent Grades Checks", expanded=True):
             st.markdown(f"#### Maximum & Minimum Longitudinal Slopes (Max: {max_grade}%, Min: {min_grade}%)")
-            
             def highlight_grades(s):
                 if "Violation" in s["Status"]: return ['background-color: #f8d7da; color: #721c24']*len(s)
                 elif "Warning" in s["Status"]: return ['background-color: #fff3cd; color: #856404']*len(s)
                 return ['background-color: #d4edda; color: #155724']*len(s)
-
             st.dataframe(df_grades.style.apply(highlight_grades, axis=1), use_container_width=True, hide_index=True)
 
-        # Vertical Curves Expander
         with st.expander("📈 Vertical Curves & K-Values Checks", expanded=True):
             st.markdown(f"#### Minimum K-Values Criteria (Crest: {min_k_crest}, Sag: {min_k_sag})")
-            
             def highlight_curves(s):
                 if "Violation" in s["Status"]: return ['background-color: #f8d7da; color: #721c24']*len(s)
                 return ['background-color: #d4edda; color: #155724']*len(s)
-
             st.dataframe(df_curves.style.apply(highlight_curves, axis=1), use_container_width=True, hide_index=True)
 
-        # --- Export Reports Section ---
         st.markdown("---")
         st.subheader("📥 Export Audit Reports")
-        
         col_exp1, col_exp2 = st.columns(2)
         
-        # 1. Text Report Generation
         report_content = f"--- Road Design Audit Report ---\n"
         report_content += f"Design Speed: {design_speed} km/h | Terrain: {terrain_type}\n\n"
         report_content += "PVI Checks:\n" + df_pvi.to_string(index=False) + "\n\n"
@@ -154,15 +148,8 @@ if uploaded_file is not None:
         report_content += "Curve Checks:\n" + df_curves.to_string(index=False) + "\n"
         
         with col_exp1:
-            st.download_button(
-                label="📄 Download as Text (Notepad)",
-                data=report_content,
-                file_name="Design_Audit_Report.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
+            st.download_button(label="📄 Download as Text (Notepad)", data=report_content, file_name="Design_Audit_Report.txt", mime="text/plain", use_container_width=True)
             
-        # 2. Formatted Excel Report Generation
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df_pvi.to_excel(writer, sheet_name='PVI Checks', index=False)
@@ -170,19 +157,13 @@ if uploaded_file is not None:
             df_curves.to_excel(writer, sheet_name='Vertical Curves', index=False)
             
             workbook = writer.book
-            
-            header_format = workbook.add_format({
-                'bold': True, 'text_wrap': True, 'valign': 'top', 
-                'fg_color': '#007bff', 'font_color': 'white', 'border': 1
-            })
-            
+            header_format = workbook.add_format({'bold': True, 'text_wrap': True, 'valign': 'top', 'fg_color': '#007bff', 'font_color': 'white', 'border': 1})
             pass_format = workbook.add_format({'bg_color': '#c6efce', 'font_color': '#006100'})
             warn_format = workbook.add_format({'bg_color': '#ffeb9c', 'font_color': '#9c6500'})
             fail_format = workbook.add_format({'bg_color': '#ffc7ce', 'font_color': '#9c0006'})
             
             for sheet_name, df in zip(['PVI Checks', 'Grades Checks', 'Vertical Curves'], [df_pvi, df_grades, df_curves]):
                 worksheet = writer.sheets[sheet_name]
-                
                 for col_num, value in enumerate(df.columns.values):
                     worksheet.write(0, col_num, value, header_format)
                     worksheet.set_column(col_num, col_num, 22) 
@@ -191,24 +172,12 @@ if uploaded_file is not None:
                     status_col_idx = df.columns.get_loc('Status')
                     for row_num in range(len(df)):
                         status_val = str(df.iloc[row_num]['Status'])
-                        if 'Pass' in status_val:
-                            fmt = pass_format
-                        elif 'Warning' in status_val:
-                            fmt = warn_format
-                        else:
-                            fmt = fail_format
+                        fmt = pass_format if 'Pass' in status_val else (warn_format if 'Warning' in status_val else fail_format)
                         worksheet.write(row_num + 1, status_col_idx, status_val, fmt)
 
         excel_data = output.getvalue()
-        
         with col_exp2:
-            st.download_button(
-                label="📊 Download as Excel (Formatted)",
-                data=excel_data,
-                file_name="Design_Audit_Report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+            st.download_button(label="📊 Download as Excel (Formatted)", data=excel_data, file_name="Design_Audit_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
     except Exception as e:
         st.error(f"Error processing DXF file: {e}")
