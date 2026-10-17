@@ -1,6 +1,7 @@
 import streamlit as st
 import ezdxf
 import pandas as pd
+import io
 
 # Page Configuration
 st.set_page_config(
@@ -135,20 +136,80 @@ if uploaded_file is not None:
 
             st.dataframe(df_curves.style.apply(highlight_curves, axis=1), use_container_width=True, hide_index=True)
 
-        # Export Button
+        # --- Export Reports Section ---
         st.markdown("---")
-        if st.button("📥 Export Comprehensive Audit Report (CSV/Text)", type="primary"):
-            report_content = f"--- Road Design Audit Report ---\n"
-            report_content += f"Design Speed: {design_speed} km/h | Terrain: {terrain_type}\n\n"
-            report_content += "PVI Checks:\n" + df_pvi.to_string() + "\n\n"
-            report_content += "Grade Checks:\n" + df_grades.to_string() + "\n\n"
-            report_content += "Curve Checks:\n" + df_curves.to_string() + "\n"
-            
+        st.subheader("📥 Export Audit Reports")
+        
+        # تقسيم الشاشة لزرارين
+        col_exp1, col_exp2 = st.columns(2)
+        
+        # 1. Text Report Generation
+        report_content = f"--- Road Design Audit Report ---\n"
+        report_content += f"Design Speed: {design_speed} km/h | Terrain: {terrain_type}\n\n"
+        report_content += "PVI Checks:\n" + df_pvi.to_string(index=False) + "\n\n"
+        report_content += "Grade Checks:\n" + df_grades.to_string(index=False) + "\n\n"
+        report_content += "Curve Checks:\n" + df_curves.to_string(index=False) + "\n"
+        
+        with col_exp1:
             st.download_button(
-                label="Confirm Download",
+                label="📄 Download as Text (Notepad)",
                 data=report_content,
                 file_name="Design_Audit_Report.txt",
-                mime="text/plain"
+                mime="text/plain",
+                use_container_width=True
+            )
+            
+        # 2. Formatted Excel Report Generation
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # كتابة الجداول في شيتات منفصلة
+            df_pvi.to_excel(writer, sheet_name='PVI Checks', index=False)
+            df_grades.to_excel(writer, sheet_name='Grades Checks', index=False)
+            df_curves.to_excel(writer, sheet_name='Vertical Curves', index=False)
+            
+            # عمل تنسيقات للألوان والهيدر
+            workbook = writer.book
+            
+            header_format = workbook.add_format({
+                'bold': True, 'text_wrap': True, 'valign': 'top', 
+                'fg_color': '#007bff', 'font_color': 'white', 'border': 1
+            })
+            
+            pass_format = workbook.add_format({'bg_color': '#c6efce', 'font_color': '#006100'})
+            warn_format = workbook.add_format({'bg_color': '#ffeb9c', 'font_color': '#9c6500'})
+            fail_format = workbook.add_format({'bg_color': '#ffc7ce', 'font_color': '#9c0006'})
+            
+            # تطبيق التنسيقات على كل شيت
+            for sheet_name, df in zip(['PVI Checks', 'Grades Checks', 'Vertical Curves'], [df_pvi, df_grades, df_curves]):
+                worksheet = writer.sheets[sheet_name]
+                
+                # تلوين الهيدر وتوسيع الأعمدة
+                for col_num, value in enumerate(df.columns.values):
+                    worksheet.write(0, col_num, value, header_format)
+                    worksheet.set_column(col_num, col_num, 22) # عرض العمود
+                
+                # تلوين عمود الـ Status حسب الحالة
+                if 'Status' in df.columns:
+                    status_col_idx = df.columns.get_loc('Status')
+                    for row_num in range(len(df)):
+                        status_val = str(df.iloc[row_num]['Status'])
+                        if 'Pass' in status_val:
+                            fmt = pass_format
+                        elif 'Warning' in status_val:
+                            fmt = warn_format
+                        else:
+                            fmt = fail_format
+                        worksheet.write(row_num + 1, status_col_idx, status_val, fmt)
+
+        excel_data = output.getvalue()
+        
+        with col_exp2:
+            st.download_button(
+                label="📊 Download as Excel (Formatted)",
+                data=excel_data,
+                file_name="Design_Audit_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
             )
 
     except Exception as e:
