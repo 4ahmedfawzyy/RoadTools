@@ -47,13 +47,13 @@ if criteria_mode == "Manual Custom Entry":
     with st.expander("🛠️ Custom Limits Input", expanded=True):
         col1, col2, col3 = st.columns(3)
         with col1:
-            max_grade = st.number_input("Max Longitudinal Slope (%)", value=float(default_max_grade), step=0.5)
-            min_grade = st.number_input("Min Longitudinal Slope (%)", value=0.5, step=0.1)
+            max_grade = st.number_input("Max Longitudinal Slope (%)", value=float(default_max_grade), step=0.5, format="%.2f")
+            min_grade = st.number_input("Min Longitudinal Slope (%)", value=0.5, step=0.1, format="%.2f")
         with col2:
-            min_radius = st.number_input("Min Horizontal Radius (m)", value=float(default_min_radius), step=10.0)
+            min_radius = st.number_input("Min Horizontal Radius (m)", value=float(default_min_radius), step=1.0, format="%.2f")
         with col3:
-            min_k_crest = st.number_input("Min K-Value (Crest)", value=float(default_k_crest), step=1.0)
-            min_k_sag = st.number_input("Min K-Value (Sag)", value=float(default_k_sag), step=1.0)
+            min_k_crest = st.number_input("Min K-Value (Crest)", value=float(default_k_crest), step=1.0, format="%.2f")
+            min_k_sag = st.number_input("Min K-Value (Sag)", value=float(default_k_sag), step=1.0, format="%.2f")
 else:
     max_grade = default_max_grade
     min_grade = 0.5
@@ -78,32 +78,32 @@ if uploaded_file is not None:
         st.markdown("---")
         st.subheader("📊 Design Check Audit Results")
         
-        # Simulated Data (To be replaced with actual DXF parsing logic later)
+        # Simulated Data (Now including Profile Name for multiple roads support)
         # 1. PVI Checks
         pvi_data = [
-            {"Station": 1000.00, "Type": "PVI", "Status": "Pass"},
-            {"Station": 1234.25, "Type": "PVI", "Status": "Warning (Not multiple of 5)"}, 
-            {"Station": 1500.00, "Type": "PVI", "Status": "Pass"},
-            {"Station": 1782.50, "Type": "PVI", "Status": "Warning (Not multiple of 5)"}
+            {"Profile Name": "Main_Road_01", "Station": 1000.00, "Type": "PVI", "Status": "Pass"},
+            {"Profile Name": "Main_Road_01", "Station": 1234.25, "Type": "PVI", "Status": "Warning (Not multiple of 5)"}, 
+            {"Profile Name": "Side_Road_A", "Station": 1500.00, "Type": "PVI", "Status": "Pass"},
+            {"Profile Name": "Side_Road_A", "Station": 1782.50, "Type": "PVI", "Status": "Warning (Not multiple of 5)"}
         ]
         df_pvi = pd.DataFrame(pvi_data)
 
         # 2. Slopes & Grades Checks
         tangents_data = [
-            {"Start Station": 1000, "End Station": 1234.25, "Grade (%)": 0.3, "Status": "Warning (Below Min)"}, 
-            {"Start Station": 1234.25, "End Station": 1500, "Grade (%)": 5.8, "Status": "Violation (Exceeds Max)"},   
-            {"Start Station": 1500, "End Station": 1782.5, "Grade (%)": 2.5, "Status": "Pass"}
+            {"Profile Name": "Main_Road_01", "Start Station": 1000, "End Station": 1234.25, "Grade (%)": 0.3, "Status": "Warning (Below Min)"}, 
+            {"Profile Name": "Main_Road_01", "Start Station": 1234.25, "End Station": 1500, "Grade (%)": 5.8, "Status": "Violation (Exceeds Max)"},   
+            {"Profile Name": "Side_Road_A", "Start Station": 1500, "End Station": 1782.5, "Grade (%)": 2.5, "Status": "Pass"}
         ]
         df_grades = pd.DataFrame(tangents_data)
 
         # 3. Vertical Curves Checks
         curves_data = [
-            {"Station": 1234.25, "Curve Type": "Crest", "Actual K-Value": 20, "Required K-Value": min_k_crest, "Status": "Violation (Below Min)"},
-            {"Station": 1500.00, "Curve Type": "Sag", "Actual K-Value": 40, "Required K-Value": min_k_sag, "Status": "Violation (Below Min)" if 40 < min_k_sag else "Pass"}
+            {"Profile Name": "Main_Road_01", "Station": 1234.25, "Curve Type": "Crest", "Actual K-Value": 20, "Required K-Value": min_k_crest, "Status": "Violation (Below Min)"},
+            {"Profile Name": "Side_Road_A", "Station": 1500.00, "Curve Type": "Sag", "Actual K-Value": 40, "Required K-Value": min_k_sag, "Status": "Violation (Below Min)" if 40 < min_k_sag else "Pass"}
         ]
         df_curves = pd.DataFrame(curves_data)
 
-        # --- Display Results in Expanders instead of Tabs for cleaner UI ---
+        # --- Display Results in Expanders ---
         
         # PVI Stations Expander
         with st.expander("📌 PVI Stationing Checks", expanded=True):
@@ -140,7 +140,6 @@ if uploaded_file is not None:
         st.markdown("---")
         st.subheader("📥 Export Audit Reports")
         
-        # تقسيم الشاشة لزرارين
         col_exp1, col_exp2 = st.columns(2)
         
         # 1. Text Report Generation
@@ -162,12 +161,10 @@ if uploaded_file is not None:
         # 2. Formatted Excel Report Generation
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            # كتابة الجداول في شيتات منفصلة
             df_pvi.to_excel(writer, sheet_name='PVI Checks', index=False)
             df_grades.to_excel(writer, sheet_name='Grades Checks', index=False)
             df_curves.to_excel(writer, sheet_name='Vertical Curves', index=False)
             
-            # عمل تنسيقات للألوان والهيدر
             workbook = writer.book
             
             header_format = workbook.add_format({
@@ -179,16 +176,13 @@ if uploaded_file is not None:
             warn_format = workbook.add_format({'bg_color': '#ffeb9c', 'font_color': '#9c6500'})
             fail_format = workbook.add_format({'bg_color': '#ffc7ce', 'font_color': '#9c0006'})
             
-            # تطبيق التنسيقات على كل شيت
             for sheet_name, df in zip(['PVI Checks', 'Grades Checks', 'Vertical Curves'], [df_pvi, df_grades, df_curves]):
                 worksheet = writer.sheets[sheet_name]
                 
-                # تلوين الهيدر وتوسيع الأعمدة
                 for col_num, value in enumerate(df.columns.values):
                     worksheet.write(0, col_num, value, header_format)
-                    worksheet.set_column(col_num, col_num, 22) # عرض العمود
+                    worksheet.set_column(col_num, col_num, 22) 
                 
-                # تلوين عمود الـ Status حسب الحالة
                 if 'Status' in df.columns:
                     status_col_idx = df.columns.get_loc('Status')
                     for row_num in range(len(df)):
