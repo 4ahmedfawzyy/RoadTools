@@ -28,6 +28,11 @@ st.markdown(
         .metric-label { font-size: .8rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; opacity: .7; }
         .metric-value { font-size: 2rem; font-weight: 800; color: #5B9BE8; margin-top: .1rem; }
         button[data-baseweb="tab"] { font-weight: 600; }
+        /* Blue primary buttons (instead of the default red) */
+        button[kind="primary"], button[data-testid="stBaseButton-primary"] {
+            background-color: #2E5C9A !important; border-color: #2E5C9A !important; color: #fff !important; }
+        button[kind="primary"]:hover, button[data-testid="stBaseButton-primary"]:hover {
+            background-color: #3A70B8 !important; border-color: #3A70B8 !important; }
         .disclaimer { font-size: .8rem; opacity: .65; text-align: center; margin: 2rem 0 .5rem; }
     </style>
     """,
