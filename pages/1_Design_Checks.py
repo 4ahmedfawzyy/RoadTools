@@ -1,5 +1,6 @@
 import hashlib
 import io
+import math
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -67,6 +68,15 @@ st.sidebar.markdown("**Alignment level check**")
 snap_tol = st.sidebar.number_input("Plan snap tolerance (m)", value=0.05, step=0.01, format="%.2f",
                                    help="Lines closer than this are treated as touching (T-junction endpoints).")
 level_tol = st.sidebar.number_input("Max level difference at intersections (m)", value=0.05, step=0.01, format="%.3f")
+chk_angle = st.sidebar.checkbox("Check intersection angle", value=True)
+min_angle = st.sidebar.number_input("Min intersection angle (°)", value=60.0, step=5.0, min_value=0.0, max_value=90.0,
+                                    format="%.1f", disabled=not chk_angle,
+                                    help="Acute angle (0-90°) between the two alignments at the crossing.")
+max_angle = st.sidebar.number_input("Max intersection angle (°)", value=90.0, step=5.0, min_value=0.0, max_value=90.0,
+                                    format="%.1f", disabled=not chk_angle,
+                                    help="Upper limit of the accepted range. 90° means perpendicular crossings are accepted.")
+if chk_angle and min_angle > max_angle:
+    st.sidebar.error("Min angle must not exceed max angle.")
 
 
 # ----------------------------------------------------------------------------
@@ -265,7 +275,7 @@ def check_tangents_and_vcurves(name, pvis, lim):
         if abs(g) > lim["max_grade"]:
             status = f"Violation (exceeds max {lim['max_grade']}%)"
         elif chk_min_grade and abs(g) < min_grade_val:
-            status = f"Warning (below min {min_grade_val}%)"
+            status = f"Violation (below min {min_grade_val}%)"
         tang.append({"Alignment": name, "Start Station": round(p0["sta"], 2), "End Station": round(p1["sta"], 2),
                      "Grade (%)": round(g, 3), "Max Allowed (%)": lim["max_grade"], "Status": status})
 
@@ -304,6 +314,54 @@ def check_horizontal(name, hcurves, lim):
     return rows
 
 
+def bearing_at(geo_entry, p):
+    """Azimuth (degrees from north, clockwise) of the alignment at the point nearest to p."""
+    ls = min(geo_entry["parts"], key=lambda t: t[0].distance(p))[0]
+    d = ls.project(p)
+    coords = list(ls.coords)
+    acc, last = 0.0, None
+    for (x0, y0), (x1, y1) in zip(coords, coords[1:]):
+        seg = math.hypot(x1 - x0, y1 - y0)
+        if seg == 0:
+            continue
+        last = (x0, y0, x1, y1)
+        if acc + seg >= d - 1e-9:
+            break
+        acc += seg
+    if last is None:
+        return None
+    return math.degrees(math.atan2(last[2] - last[0], last[3] - last[1])) % 360
+
+
+def check_angles(inter_df, geo):
+    rows = []
+    for _, r in inter_df.iterrows():
+        a, b = r["Alignment A"], r["Alignment B"]
+        p = Point(r["Easting"], r["Northing"])
+        b1, b2 = bearing_at(geo[a], p), bearing_at(geo[b], p)
+        row = {"Alignment A": a, "Station A": round(station_of(geo[a], p), 2), "Bearing A (°)": None,
+               "Alignment B": b, "Station B": round(station_of(geo[b], p), 2), "Bearing B (°)": None,
+               "Intersection Angle (°)": None, "Min Allowed (°)": min_angle, "Max Allowed (°)": max_angle}
+        if b1 is None or b2 is None:
+            row["Status"] = "Warning (direction could not be determined)"
+        else:
+            diff = abs(b1 - b2) % 360
+            if diff > 180:
+                diff = 360 - diff
+            ang = min(diff, 180 - diff)  # acute angle, 0-90
+            row.update({"Bearing A (°)": round(b1, 2), "Bearing B (°)": round(b2, 2),
+                        "Intersection Angle (°)": round(ang, 2)})
+            if ang < min_angle - 1e-6:
+                row["Status"] = f"Violation (angle {ang:.1f}° below min {min_angle:.1f}°)"
+            elif ang > max_angle + 1e-6:
+                row["Status"] = f"Violation (angle {ang:.1f}° above max {max_angle:.1f}°)"
+            else:
+                row["Status"] = "Pass"
+        row.update({"Easting": r["Easting"], "Northing": r["Northing"]})
+        rows.append(row)
+    return rows
+
+
 def check_levels(inter_df, geo, aligns_by_name):
     rows = []
     for _, r in inter_df.iterrows():
@@ -324,6 +382,79 @@ def check_levels(inter_df, geo, aligns_by_name):
         row.update({"Easting": r["Easting"], "Northing": r["Northing"]})
         rows.append(row)
     return rows
+
+
+def build_excel(audit):
+    """Formatted Excel report: summary sheet + one styled sheet per check table."""
+    from xlsxwriter.utility import xl_col_to_name
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
+        wb = w.book
+        title_f = wb.add_format({"bold": True, "font_size": 16, "font_color": "#1F3864"})
+        note_f = wb.add_format({"italic": True, "font_color": "#555555"})
+        hdr = wb.add_format({"bold": True, "font_color": "white", "bg_color": "#1F3864", "border": 1,
+                             "align": "center", "valign": "vcenter", "text_wrap": True})
+        txt = wb.add_format({"border": 1, "valign": "vcenter"})
+        n2 = wb.add_format({"border": 1, "valign": "vcenter", "num_format": "0.00"})
+        n3 = wb.add_format({"border": 1, "valign": "vcenter", "num_format": "0.000"})
+        cnt = wb.add_format({"border": 1, "align": "center"})
+        red = wb.add_format({"bg_color": "#F8D7DA", "font_color": "#721C24"})
+        amber = wb.add_format({"bg_color": "#FFF3CD", "font_color": "#856404"})
+        green = wb.add_format({"bg_color": "#D4EDDA", "font_color": "#155724"})
+
+        # Summary sheet (first tab)
+        ws = wb.add_worksheet("Summary")
+        w.sheets["Summary"] = ws
+        ws.write(0, 0, "LandXML Design Audit Report", title_f)
+        ws.write(1, 0, "Preliminary check based on simplified criteria. Verify against the governing design code.", note_f)
+        for c, h in enumerate(["Check", "Total", "Pass", "Warnings", "Violations"]):
+            ws.write(3, c, h, hdr)
+        r = 4
+        for name, df in audit.items():
+            st_ = df["Status"] if not df.empty else pd.Series(dtype=str)
+            ws.write(r, 0, name, txt)
+            ws.write(r, 1, len(st_), cnt)
+            ws.write(r, 2, int((st_ == "Pass").sum()), cnt)
+            ws.write(r, 3, int(st_.str.startswith("Warning").sum()), cnt)
+            ws.write(r, 4, int(st_.str.startswith("Violation").sum()), cnt)
+            r += 1
+        ws.conditional_format(4, 3, r - 1, 3, {"type": "cell", "criteria": ">", "value": 0, "format": amber})
+        ws.conditional_format(4, 4, r - 1, 4, {"type": "cell", "criteria": ">", "value": 0, "format": red})
+        ws.set_column(0, 0, 24)
+        ws.set_column(1, 4, 12)
+
+        for name, df in audit.items():
+            sheet = name[:31]
+            if df.empty:
+                e = wb.add_worksheet(sheet)
+                w.sheets[sheet] = e
+                e.write(0, 0, "Nothing to check.", note_f)
+                continue
+            df.to_excel(w, sheet_name=sheet, index=False)
+            sh = w.sheets[sheet]
+            sh.set_row(0, 32)
+            for c, col in enumerate(df.columns):
+                sh.write(0, c, col, hdr)
+                longest = max([len(str(col))] + [len(str(v)) for v in df[col].head(300)])
+                width = min(max(longest + 3, 12), 55)
+                if pd.api.types.is_float_dtype(df[col]):
+                    fmt = n3 if any(k in col for k in ("Level", "Δ", "Grade", "Easting", "Northing")) else n2
+                elif pd.api.types.is_numeric_dtype(df[col]):
+                    fmt = n2
+                else:
+                    fmt = txt
+                sh.set_column(c, c, width, fmt)
+            sh.freeze_panes(1, 0)
+            sh.autofilter(0, 0, len(df), len(df.columns) - 1)
+            sc = xl_col_to_name(list(df.columns).index("Status"))
+            area = (1, 0, len(df), len(df.columns) - 1)
+            sh.conditional_format(*area, {"type": "formula", "criteria": f'=LEFT(${sc}2,9)="Violation"', "format": red})
+            sh.conditional_format(*area, {"type": "formula", "criteria": f'=LEFT(${sc}2,7)="Warning"', "format": amber})
+            sh.conditional_format(*area, {"type": "formula", "criteria": f'=${sc}2="Pass"', "format": green})
+            sh.set_landscape()
+            sh.fit_to_pages(1, 0)
+    return buf
 
 
 def color_rows(s):
@@ -435,14 +566,14 @@ def get_limits(n):
 
 
 # --- Step 2: intersections ------------------------------------------------------
-st.markdown("### 🔀 Step 2: At-grade Intersections (level check)")
+st.markdown("### 🔀 Step 2: At-grade Intersections (level & angle checks)")
 inter_rows = find_intersections(aligns, geo, snap_tol)
 inter_df = pd.DataFrame(inter_rows, columns=["Alignment A", "Alignment B", "Easting", "Northing"])
 if inter_df.empty:
     st.info("No plan intersections found between alignments.")
 else:
     st.caption("All detected crossings are treated as at-grade junctions: the two design levels must match "
-               "within the tolerance set in the sidebar.")
+               "within the tolerance, and the intersection angle must fall inside the min-max range set in the sidebar.")
     st.dataframe(inter_df, use_container_width=True, hide_index=True)
 
 # --- Step 3: run -----------------------------------------------------------------
@@ -456,9 +587,11 @@ if st.button("🚀 Run Design Audit", type="primary"):
             tg += t
             vc += v
     lv = check_levels(inter_df, geo, by_name) if len(inter_df) else []
+    ag = check_angles(inter_df, geo) if (chk_angle and len(inter_df)) else []
     st.session_state["audit"] = {
         "Horizontal Curves": pd.DataFrame(hz), "Tangent Grades": pd.DataFrame(tg),
         "Vertical Curves": pd.DataFrame(vc), "Alignment Levels": pd.DataFrame(lv),
+        "Intersection Angles": pd.DataFrame(ag),
     }
 
 audit = st.session_state.get("audit")
@@ -475,14 +608,15 @@ if audit:
     c4.metric("Violations", int(all_status.str.startswith("Violation").sum()))
     only_issues = st.checkbox("Show violations and warnings only", value=False)
 
-    icons = {"Horizontal Curves": "↔️", "Tangent Grades": "📐", "Vertical Curves": "📈", "Alignment Levels": "🔀"}
+    icons = {"Horizontal Curves": "↔️", "Tangent Grades": "📐", "Vertical Curves": "📈", "Alignment Levels": "🔀", "Intersection Angles": "🧭"}
     for title, df in audit.items():
         with st.expander(f"{icons[title]} {title} ({len(df)})", expanded=True):
             if df.empty:
                 st.caption("Nothing to check.")
                 continue
             view = df[df["Status"] != "Pass"] if only_issues else df
-            st.dataframe(view.style.apply(color_rows, axis=1), use_container_width=True, hide_index=True)
+            st.dataframe(view.style.apply(color_rows, axis=1).format(precision=3, na_rep=""),
+                         use_container_width=True, hide_index=True)
 
     # Plan view
     fig = go.Figure()
@@ -490,15 +624,22 @@ if audit:
         xs = [p[0] for e in a["elems"] for p in e["pts"]]
         ys = [p[1] for e in a["elems"] for p in e["pts"]]
         fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=a["name"]))
-    lv = audit["Alignment Levels"]
-    if not lv.empty:
-        colors = ["#dc3545" if s.startswith("Violation") else "#ffc107" if s.startswith("Warning") else "#28a745"
-                  for s in lv["Status"]]
+    marks = {}
+    for tname, label in (("Alignment Levels", "Level"), ("Intersection Angles", "Angle")):
+        for _, r in audit.get(tname, pd.DataFrame(columns=["Status"])).iterrows():
+            m = marks.setdefault((r["Alignment A"], r["Alignment B"], r["Easting"], r["Northing"]),
+                                 {"rank": 0, "lines": []})
+            rank = 2 if r["Status"].startswith("Violation") else 1 if r["Status"].startswith("Warning") else 0
+            m["rank"] = max(m["rank"], rank)
+            m["lines"].append(f"{label}: {r['Status']}")
+    if marks:
+        palette = {0: "#28a745", 1: "#ffc107", 2: "#dc3545"}
         fig.add_trace(go.Scatter(
-            x=lv["Easting"], y=lv["Northing"], mode="markers", name="Intersections",
-            marker=dict(size=11, color=colors, line=dict(width=1, color="black")),
-            text=[f"{r['Alignment A']} × {r['Alignment B']}<br>ΔZ = {r['Δ Level (m)']}<br>{r['Status']}"
-                  for _, r in lv.iterrows()], hoverinfo="text"))
+            x=[k[2] for k in marks], y=[k[3] for k in marks], mode="markers", name="Intersections",
+            marker=dict(size=11, color=[palette[m["rank"]] for m in marks.values()],
+                        line=dict(width=1, color="black")),
+            text=[f"{k[0]} × {k[1]}<br>" + "<br>".join(m["lines"]) for k, m in marks.items()],
+            hoverinfo="text"))
     fig.update_layout(title="Plan view", height=520, yaxis=dict(scaleanchor="x", scaleratio=1),
                       xaxis_title="Easting (m)", yaxis_title="Northing (m)")
     st.plotly_chart(fig, use_container_width=True)
@@ -512,10 +653,7 @@ if audit:
         report += f"{title}:\n" + (df.to_string(index=False) if not df.empty else "none") + "\n\n"
     col1.download_button("📄 Download Text Report", report, "LandXML_Audit_Report.txt", "text/plain",
                          use_container_width=True)
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
-        for title, df in audit.items():
-            df.to_excel(w, sheet_name=title[:31], index=False)
+    buf = build_excel(audit)
     col2.download_button("📊 Download Excel Report", buf.getvalue(), "LandXML_Audit_Report.xlsx",
                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
