@@ -4,3 +4,4 @@ shapely
 plotly
 defusedxml
 xlsxwriter
+python-docx
