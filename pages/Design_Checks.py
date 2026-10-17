@@ -36,6 +36,11 @@ st.markdown(
                                    border-radius: 10px; padding: .7rem 1rem; }
         [data-testid="stMetricLabel"] { opacity: .75; }
         button[data-baseweb="tab"] { font-weight: 600; }
+        /* Blue primary buttons (instead of the default red) */
+        button[kind="primary"], button[data-testid="stBaseButton-primary"] {
+            background-color: #2E5C9A !important; border-color: #2E5C9A !important; color: #fff !important; }
+        button[kind="primary"]:hover, button[data-testid="stBaseButton-primary"]:hover {
+            background-color: #3A70B8 !important; border-color: #3A70B8 !important; }
         .disclaimer { font-size: .8rem; opacity: .65; text-align: center; margin: 2rem 0 .5rem; }
     </style>
     """,
