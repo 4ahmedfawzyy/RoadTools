@@ -69,12 +69,12 @@ snap_tol = st.sidebar.number_input("Plan snap tolerance (m)", value=0.05, step=0
                                    help="Lines closer than this are treated as touching (T-junction endpoints).")
 level_tol = st.sidebar.number_input("Max level difference at intersections (m)", value=0.05, step=0.01, format="%.3f")
 chk_angle = st.sidebar.checkbox("Check intersection angle", value=True)
-min_angle = st.sidebar.number_input("Min intersection angle (°)", value=60.0, step=5.0, min_value=0.0, max_value=90.0,
+min_angle = st.sidebar.number_input("Min intersection angle (°)", value=60.0, step=5.0, min_value=0.0, max_value=180.0,
                                     format="%.1f", disabled=not chk_angle,
-                                    help="Acute angle (0-90°) between the two alignments at the crossing.")
-max_angle = st.sidebar.number_input("Max intersection angle (°)", value=90.0, step=5.0, min_value=0.0, max_value=90.0,
+                                    help="Two crossing alignments form an angle and its supplement (e.g. 70° and 110°). The check passes if either one is inside the range.")
+max_angle = st.sidebar.number_input("Max intersection angle (°)", value=90.0, step=5.0, min_value=0.0, max_value=180.0,
                                     format="%.1f", disabled=not chk_angle,
-                                    help="Upper limit of the accepted range. 90° means perpendicular crossings are accepted.")
+                                    help="Upper limit of the accepted range (up to 180°), e.g. 60° to 120° or 75° to 105°.")
 if chk_angle and min_angle > max_angle:
     st.sidebar.error("Min angle must not exceed max angle.")
 
@@ -341,22 +341,20 @@ def check_angles(inter_df, geo):
         b1, b2 = bearing_at(geo[a], p), bearing_at(geo[b], p)
         row = {"Alignment A": a, "Station A": round(station_of(geo[a], p), 2), "Bearing A (°)": None,
                "Alignment B": b, "Station B": round(station_of(geo[b], p), 2), "Bearing B (°)": None,
-               "Intersection Angle (°)": None, "Min Allowed (°)": min_angle, "Max Allowed (°)": max_angle}
+               "Intersection Angle (°)": None, "Supplementary (°)": None, "Min Allowed (°)": min_angle, "Max Allowed (°)": max_angle}
         if b1 is None or b2 is None:
             row["Status"] = "Warning (direction could not be determined)"
         else:
             diff = abs(b1 - b2) % 360
             if diff > 180:
                 diff = 360 - diff
-            ang = min(diff, 180 - diff)  # acute angle, 0-90
+            ang = min(diff, 180 - diff)  # acute angle
+            supp = 180 - ang             # the other angle formed by the same two lines
             row.update({"Bearing A (°)": round(b1, 2), "Bearing B (°)": round(b2, 2),
-                        "Intersection Angle (°)": round(ang, 2)})
-            if ang < min_angle - 1e-6:
-                row["Status"] = f"Violation (angle {ang:.1f}° below min {min_angle:.1f}°)"
-            elif ang > max_angle + 1e-6:
-                row["Status"] = f"Violation (angle {ang:.1f}° above max {max_angle:.1f}°)"
-            else:
-                row["Status"] = "Pass"
+                        "Intersection Angle (°)": round(ang, 2), "Supplementary (°)": round(supp, 2)})
+            in_range = (min_angle - 1e-6 <= ang <= max_angle + 1e-6) or (min_angle - 1e-6 <= supp <= max_angle + 1e-6)
+            row["Status"] = "Pass" if in_range else (
+                f"Violation (angles {ang:.1f}° / {supp:.1f}° outside {min_angle:.1f}°-{max_angle:.1f}°)")
         row.update({"Easting": r["Easting"], "Northing": r["Northing"]})
         rows.append(row)
     return rows
@@ -564,6 +562,33 @@ def get_limits(n):
                 "min_k_crest": std["k_crest"], "min_k_sag": std["k_sag"], "speed": sp}
     return {**manual_limits, "speed": sp}
 
+
+# --- Applied criteria (shown right after the file is loaded) --------------------
+src_label = f"AASHTO, {terrain} terrain" if criteria_mode == "Use Code Standards (AASHTO)" else "Manual custom limits"
+st.markdown(f"#### 📋 Applied Design Criteria ({src_label})")
+by_speed = {}
+for n in names:
+    by_speed.setdefault(int(speed_map.get(n, 80)), []).append(n)
+crit_rows = []
+for sp in sorted(by_speed):
+    lim = get_limits(by_speed[sp][0])
+    crit_rows.append({
+        "Design Speed (km/h)": sp,
+        "Max Grade (%)": lim["max_grade"],
+        "Min Grade (%)": min_grade_val if chk_min_grade else None,
+        "Min Horizontal Radius (m)": lim["min_radius"],
+        "Min K (Crest)": lim["min_k_crest"],
+        "Min K (Sag)": lim["min_k_sag"],
+        "Min Vertical Curve Length (m)": round(0.6 * sp, 1) if chk_vc_len else None,
+        "Alignments": ", ".join(by_speed[sp]),
+    })
+st.dataframe(pd.DataFrame(crit_rows).style.format(precision=2, na_rep="-"), use_container_width=True, hide_index=True)
+extra = [f"Level difference at intersections ≤ {level_tol} m"]
+if chk_angle:
+    extra.append(f"Intersection angle between {min_angle:.1f}° and {max_angle:.1f}°")
+if chk_min_grade is False:
+    extra.append("Min grade check is off")
+st.caption(" • ".join(extra))
 
 # --- Step 2: intersections ------------------------------------------------------
 st.markdown("### 🔀 Step 2: At-grade Intersections (level & angle checks)")
