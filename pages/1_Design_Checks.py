@@ -55,20 +55,18 @@ if criteria_mode == "Manual Custom Limits":
     manual_limits["min_radius"] = st.sidebar.number_input("Min Horizontal Radius (m)", value=230.0, step=10.0, format="%.2f")
     manual_limits["min_k_crest"] = st.sidebar.number_input("Min K-Value (Crest)", value=26.0, step=1.0, format="%.2f")
     manual_limits["min_k_sag"] = st.sidebar.number_input("Min K-Value (Sag)", value=30.0, step=1.0, format="%.2f")
-    manual_limits["speed"] = None
 
 st.sidebar.markdown("**Optional checks**")
 chk_min_grade = st.sidebar.checkbox("Check minimum grade (drainage)", value=False)
 min_grade_val = st.sidebar.number_input("Min grade (%)", value=0.3, step=0.1, format="%.2f", disabled=not chk_min_grade)
 chk_vc_len = st.sidebar.checkbox("Check min vertical curve length (0.6 × V)", value=True,
-                                 help="Only applies when a design speed is known (AASHTO mode).")
+                                 help="Uses the design speed selected in Step 1.")
 break_tol = st.sidebar.number_input("Grade break without curve: flag if A > (%)", value=1.0, step=0.1, format="%.2f")
 
 st.sidebar.markdown("**Alignment level check**")
 snap_tol = st.sidebar.number_input("Plan snap tolerance (m)", value=0.05, step=0.01, format="%.2f",
                                    help="Lines closer than this are treated as touching (T-junction endpoints).")
-level_tol = st.sidebar.number_input("At-grade: max level difference (m)", value=0.05, step=0.01, format="%.3f")
-clearance = st.sidebar.number_input("Grade-separated: min clearance (m)", value=5.5, step=0.1, format="%.2f")
+level_tol = st.sidebar.number_input("Max level difference at intersections (m)", value=0.05, step=0.01, format="%.3f")
 
 
 # ----------------------------------------------------------------------------
@@ -316,16 +314,13 @@ def check_levels(inter_df, geo, aligns_by_name):
         zb = elev_at(sb, aligns_by_name[b]["pvis"])
         row = {"Alignment A": a, "Station A": round(sa, 2), "Level A": None if za is None else round(za, 3),
                "Alignment B": b, "Station B": round(sb, 2), "Level B": None if zb is None else round(zb, 3),
-               "Junction Type": r["Junction type"], "Δ Level (m)": None}
+               "Δ Level (m)": None}
         if za is None or zb is None:
             row["Status"] = "Warning (no design profile at this station)"
         else:
             d = abs(za - zb)
             row["Δ Level (m)"] = round(d, 3)
-            if r["Junction type"] == "At-grade":
-                row["Status"] = "Pass" if d <= level_tol else f"Violation (levels differ by {d:.3f} m, tol {level_tol} m)"
-            else:
-                row["Status"] = "Pass" if d >= clearance else f"Violation (clearance {d:.2f} m < {clearance} m)"
+            row["Status"] = "Pass" if d <= level_tol else f"Violation (levels differ by {d:.3f} m, tol {level_tol} m)"
         row.update({"Easting": r["Easting"], "Northing": r["Northing"]})
         rows.append(row)
     return rows
@@ -386,48 +381,43 @@ if no_geom:
 st.markdown("### ⚙️ Step 1: Design Criteria & Speed Settings")
 if criteria_mode == "Use Code Standards (AASHTO)":
     terrain = st.selectbox("🌍 Project Terrain Type:", ["Level", "Rolling", "Mountainous"], index=0)
-    speed_mode = st.radio("🚦 Design Speed Assignment:",
-                          ["Single Global Speed for All Alignments", "Different Speed for Each Alignment"], horizontal=True)
-    if speed_mode.startswith("Single"):
-        gspeed = st.selectbox("Global Design Speed (km/h):", SPEEDS, index=6)
-        speed_map = {n: gspeed for n in names}
-    else:
-        edited = st.data_editor(
-            pd.DataFrame({"Alignment": names, "Design Speed (km/h)": [80] * len(names)}),
-            column_config={"Design Speed (km/h)": st.column_config.SelectboxColumn(options=SPEEDS, required=True)},
-            disabled=["Alignment"], hide_index=True, use_container_width=True, key=f"speed_{fhash}",
-        )
-        speed_map = dict(zip(edited["Alignment"], edited["Design Speed (km/h)"]))
+else:
+    st.info("ℹ️ Using the manual limits from the sidebar. The design speed below is used for the "
+            "minimum vertical curve length check (0.6 × V).")
 
-    def get_limits(n):
-        sp = int(speed_map.get(n, 80))
+speed_mode = st.radio("🚦 Design Speed Assignment:",
+                      ["Single Global Speed for All Alignments", "Different Speed for Each Alignment"], horizontal=True)
+if speed_mode.startswith("Single"):
+    gspeed = st.selectbox("Global Design Speed (km/h):", SPEEDS, index=6)
+    speed_map = {n: gspeed for n in names}
+else:
+    edited = st.data_editor(
+        pd.DataFrame({"Alignment": names, "Design Speed (km/h)": [80] * len(names)}),
+        column_config={"Design Speed (km/h)": st.column_config.SelectboxColumn(options=SPEEDS, required=True)},
+        disabled=["Alignment"], hide_index=True, use_container_width=True, key=f"speed_{fhash}",
+    )
+    speed_map = dict(zip(edited["Alignment"], edited["Design Speed (km/h)"]))
+
+
+def get_limits(n):
+    sp = int(speed_map.get(n, 80))
+    if criteria_mode == "Use Code Standards (AASHTO)":
         std = AASHTO_DB[sp]
         return {"max_grade": std["max_grade"][terrain], "min_radius": std["min_radius"],
                 "min_k_crest": std["k_crest"], "min_k_sag": std["k_sag"], "speed": sp}
-else:
-    st.info("ℹ️ Using the manual limits from the sidebar for all alignments.")
+    return {**manual_limits, "speed": sp}
 
-    def get_limits(n):
-        return manual_limits
 
 # --- Step 2: intersections ------------------------------------------------------
-st.markdown("### 🔀 Step 2: Alignment Intersections (level check)")
+st.markdown("### 🔀 Step 2: At-grade Intersections (level check)")
 inter_rows = find_intersections(aligns, geo, snap_tol)
-default_type = st.radio("Default junction type:", ["At-grade", "Grade-separated"], horizontal=True,
-                        help="At-grade: levels should match. Grade-separated: levels must differ by the clearance.")
 inter_df = pd.DataFrame(inter_rows, columns=["Alignment A", "Alignment B", "Easting", "Northing"])
 if inter_df.empty:
     st.info("No plan intersections found between alignments.")
-    inter_edit = inter_df.assign(**{"Junction type": []})
 else:
-    inter_df["Junction type"] = default_type
-    st.caption("Set each crossing to At-grade or Grade-separated.")
-    inter_edit = st.data_editor(
-        inter_df,
-        column_config={"Junction type": st.column_config.SelectboxColumn(options=["At-grade", "Grade-separated"], required=True)},
-        disabled=["Alignment A", "Alignment B", "Easting", "Northing"],
-        hide_index=True, use_container_width=True, key=f"inter_{fhash}_{default_type}_{snap_tol}",
-    )
+    st.caption("All detected crossings are treated as at-grade junctions: the two design levels must match "
+               "within the tolerance set in the sidebar.")
+    st.dataframe(inter_df, use_container_width=True, hide_index=True)
 
 # --- Step 3: run -----------------------------------------------------------------
 if st.button("🚀 Run Design Audit", type="primary"):
@@ -439,7 +429,7 @@ if st.button("🚀 Run Design Audit", type="primary"):
             t, v = check_tangents_and_vcurves(a["name"], a["pvis"], lim)
             tg += t
             vc += v
-    lv = check_levels(inter_edit, geo, by_name) if len(inter_edit) else []
+    lv = check_levels(inter_df, geo, by_name) if len(inter_df) else []
     st.session_state["audit"] = {
         "Horizontal Curves": pd.DataFrame(hz), "Tangent Grades": pd.DataFrame(tg),
         "Vertical Curves": pd.DataFrame(vc), "Alignment Levels": pd.DataFrame(lv),
