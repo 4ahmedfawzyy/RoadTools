@@ -127,7 +127,8 @@ if uploaded_file is not None:
                 criteria_dict = edited_criteria.set_index('Profile Name').to_dict('index')
                 
                 def get_limits(profile_name):
-                    speed = criteria_dict.get(profile_name, {'Design Speed (km/h)'=80})['Design Speed (km/h)'] if isinstance(criteria_dict.get(profile_name), dict) else 80
+                    row_data = criteria_dict.get(profile_name, {'Design Speed (km/h)': 80})
+                    speed = row_data.get('Design Speed (km/h)', 80) if isinstance(row_data, dict) else 80
                     std = aashto_db[speed]
                     return {
                         'max_grade': std['max_grade'][global_terrain], 
@@ -157,7 +158,6 @@ if uploaded_file is not None:
                 raw_tangents.append({"Profile Name": prof, "Start Station": 0.00, "End Station": 140.50, "Grade (%)": 1.2})
                 raw_tangents.append({"Profile Name": prof, "Start Station": 140.50, "End Station": 338.81, "Grade (%)": 4.5})
                 
-                # Simulating curve check with radius & K-value
                 raw_curves.append({"Profile Name": prof, "Station": 140.50, "Curve Type": "Crest", "Actual Radius (m)": 250.0, "Actual K-Value": 35.0})
             
             df_pvi = pd.DataFrame(pvi_data)
