@@ -1,7 +1,8 @@
 import datetime
 import io
-import os
+import json
 import uuid
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -26,7 +27,6 @@ st.markdown(
                        border-radius: 12px; padding: 1rem 1.2rem; text-align: center; }
         .metric-label { font-size: .8rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; opacity: .7; }
         .metric-value { font-size: 2rem; font-weight: 800; color: #5B9BE8; margin-top: .1rem; }
-        .note { font-size: .88rem; opacity: .75; }
         button[data-baseweb="tab"] { font-weight: 600; }
         .disclaimer { font-size: .8rem; opacity: .65; text-align: center; margin: 2rem 0 .5rem; }
     </style>
@@ -35,43 +35,62 @@ st.markdown(
 )
 
 # ----------------------------------------------------------------------------
-# Data (AASHTO)
+# Data: one JSON file per design code in <repo>/bodr_data (see bodr_data/README.md)
 # ----------------------------------------------------------------------------
-turning_data = {
-    "Design Vehicle Type": ["Passenger Car", "Single-Unit Truck", "Intercity Bus", "WB-12 Semitrailer", "WB-20 Semitrailer"],
-    "Symbol": ["P", "SU-12", "BUS-12", "WB-12", "WB-20"],
-    "Min Design Turning Radius (m)": [7.26, 15.60, 12.70, 12.16, 13.66],
-    "Centerline Radius (CTR) (m)": [6.40, 14.46, 11.53, 10.97, 12.50],
-    "Min Inside Radius (m)": [4.39, 11.09, 7.41, 5.88, 0.59],
-}
-df_turning = pd.DataFrame(turning_data)
-vehicle_images = {
-    "P": "Passenger Car Turning Radius.png", "SU-12": "SU-12 Turning Radius.png",
-    "BUS-12": "BUS-12 Turning Radius.png", "WB-12": "WB-12 Turning Radius.png",
-    "WB-20": "WB-20 Turning Radius.png",
-}
+ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "bodr_data"
+SECTIONS = ("k_values", "horizontal", "turning")
 
-k_values_data = {
-    "Crest": {20: 1, 30: 2, 40: 4, 50: 7, 60: 11, 70: 17, 80: 26, 90: 39, 100: 52, 110: 74, 120: 95, 130: 124},
-    "Sag": {20: 3, 30: 6, 40: 9, 50: 13, 60: 18, 70: 23, 80: 30, 90: 38, 100: 45, 110: 55, 120: 63, 130: 73},
-}
-df_k = pd.DataFrame({
-    "Design Speed (km/h)": list(k_values_data["Crest"].keys()),
-    "Crest K": list(k_values_data["Crest"].values()),
-    "Sag K": list(k_values_data["Sag"].values()),
-})
 
-horizontal_data = {
-    "e (%)": [-6.0, -5.0, -4.0, -3.0, -2.0, -1.5, 0.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
-    "20": [11, 10, 10, 10, 10, 9, 9, 9, 9, 8, 8, 8, 8, 7, 7, 7, 7, 7, 7],
-    "30": [32, 31, 30, 28, 27, 27, 25, 24, 24, 23, 22, 21, 21, 20, 20, 19, 19, 18, 18],
-    "40": [74, 70, 66, 63, 60, 59, 55, 51, 50, 48, 47, 45, 43, 42, 41, 39, 38, 37, 36],
-    "50": [151, 141, 131, 123, 116, 113, 104, 96, 94, 89, 86, 82, 79, 76, 73, 70, 68, 66, 64],
-    "60": [258, 236, 218, 202, 189, 183, 167, 153, 149, 142, 135, 129, 123, 118, 113, 109, 105, 101, 98],
-    "70": [429, 386, 351, 322, 297, 286, 257, 234, 227, 214, 203, 193, 184, 175, 168, 161, 154, 148, 143],
-}
-df_horizontal = pd.DataFrame(horizontal_data)
-H_SPEEDS = [c for c in df_horizontal.columns if c != "e (%)"]
+@st.cache_data(show_spinner=False)
+def load_codes():
+    codes, errors = {}, []
+    for f in DATA_DIR.glob("*.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            codes[d.get("code", f.stem.upper())] = d
+        except Exception as e:
+            errors.append(f"{f.name}: {e}")
+    ordered = dict(sorted(codes.items(), key=lambda kv: (kv[1].get("order", 99), kv[0])))
+    return ordered, errors
+
+
+CODES, LOAD_ERRORS = load_codes()
+
+
+def k_df(cd):
+    t = cd["k_values"]
+    return pd.DataFrame({"Design Speed (km/h)": t["speeds"], "Crest K": t["crest"], "Sag K": t["sag"]})
+
+
+def h_df(cd):
+    t = cd["horizontal"]
+    df = pd.DataFrame({"e (%)": t["e"]})
+    for sp, vals in t["radii"].items():
+        df[str(sp)] = vals
+    return df
+
+
+def t_df(cd):
+    rows = [{"Design Vehicle Type": v["type"], "Symbol": v["symbol"],
+             "Min Design Turning Radius (m)": v["min_radius"], "Centerline Radius (CTR) (m)": v["ctr"],
+             "Min Inside Radius (m)": v["inside_radius"], "image": v.get("image")} for v in cd["turning"]["vehicles"]]
+    return pd.DataFrame(rows)
+
+
+def image_path(name):
+    if not name:
+        return None
+    for base in (ROOT, Path.cwd()):
+        p = base / name
+        if p.exists():
+            return p
+    return None
+
+
+def pick_index(options, preferred):
+    return options.index(preferred) if preferred in options else 0
+
 
 STRONG = "background-color: #dc3545; color: #ffffff; font-weight: 700"
 LIGHT = "background-color: rgba(220,53,69,.18)"
@@ -111,13 +130,14 @@ def clear_items():
 
 
 def describe(item):
+    code = item.get("code", "AASHTO")
     if item["tool"] == "K-Value":
-        return (f"📈 **K-value** · {item['curve_type']} · {item['speed']} km/h",
+        return (f"📈 **K-value** · {code} · {item['curve_type']} · {item['speed']} km/h",
                 f"Required minimum K = **{item['k_value']}**")
     if item["tool"] == "Horizontal Radius":
-        return (f"🔄 **Horizontal radius** · Vd {item['speed']} km/h · e = {item['e_val']}%",
+        return (f"🔄 **Horizontal radius** · {code} · Vd {item['speed']} km/h · e = {item['e_val']}%",
                 f"Minimum radius R = **{item['radius']} m**")
-    return (f"📐 **Turning radius** · {item['vehicle_name']} ({item['symbol']})",
+    return (f"📐 **Turning radius** · {code} · {item['vehicle_name']} ({item['symbol']})",
             f"Min design radius **{item['min_r']} m** · CTR {item['ctr']} m · inside radius {item['inside_r']} m")
 
 
@@ -159,16 +179,24 @@ def _table(doc, headers, rows, strong=(), light_rows=()):
     return t
 
 
-def build_docx(items, project="", prepared_by=""):
+def _source(doc, table_info):
+    p = doc.add_paragraph(f"Source: {table_info.get('source', '-')}")
+    p.runs[0].italic = True
+    p.runs[0].font.size = Pt(9)
+
+
+def build_docx(items, codes, project="", prepared_by=""):
     doc = Document()
     doc.styles["Normal"].font.name = "Calibri"
     doc.styles["Normal"].font.size = Pt(10.5)
     doc.add_heading("CO-BODR - Calculation Note", 0)
 
+    used = list(dict.fromkeys(i.get("code", "AASHTO") for i in items))
     info = doc.add_table(rows=0, cols=2)
     info.style = "Table Grid"
     for label, value in (("Project", project or "-"), ("Prepared by", prepared_by or "-"),
-                         ("Date", datetime.date.today().strftime("%d %B %Y")), ("Design code", "AASHTO")):
+                         ("Date", datetime.date.today().strftime("%d %B %Y")),
+                         ("Design code", ", ".join(used) if used else "-")):
         cells = info.add_row().cells
         _fill(cells[0], label, bold=True, size=10, center=False)
         _shade(cells[0], "E7EEF8")
@@ -180,50 +208,61 @@ def build_docx(items, project="", prepared_by=""):
         return doc
 
     n = 0
-    ks = [i for i in items if i["tool"] == "K-Value"]
-    hs = [i for i in items if i["tool"] == "Horizontal Radius"]
-    ts = [i for i in items if i["tool"] == "Turning Radius"]
+    for code in used:
+        cd = codes.get(code, {})
+        ks = [i for i in items if i.get("code", "AASHTO") == code and i["tool"] == "K-Value"]
+        hs = [i for i in items if i.get("code", "AASHTO") == code and i["tool"] == "Horizontal Radius"]
+        ts = [i for i in items if i.get("code", "AASHTO") == code and i["tool"] == "Turning Radius"]
 
-    if ks:
-        n += 1
-        doc.add_heading(f"{n}. Vertical Alignment (K-Value)", level=1)
-        _table(doc, ["Curve type", "Design speed (km/h)", "Required minimum K"],
-               [[i["curve_type"], i["speed"], i["k_value"]] for i in ks])
-        doc.add_paragraph()
-        doc.add_heading("Reference table (selected values highlighted)", level=2)
-        speeds = list(df_k["Design Speed (km/h)"])
-        rows = [[r["Design Speed (km/h)"], r["Crest K"], r["Sag K"]] for _, r in df_k.iterrows()]
-        strong = {(speeds.index(i["speed"]), 1 if i["curve_type"] == "Crest" else 2) for i in ks}
-        _table(doc, ["Design speed (km/h)", "Crest K", "Sag K"], rows, strong=strong,
-               light_rows={speeds.index(i["speed"]) for i in ks})
-        doc.add_paragraph()
+        if ks:
+            n += 1
+            doc.add_heading(f"{n}. Vertical Alignment (K-Value) - {code}", level=1)
+            _table(doc, ["Curve type", "Design speed (km/h)", "Required minimum K"],
+                   [[i["curve_type"], i["speed"], i["k_value"]] for i in ks])
+            doc.add_paragraph()
+            if "k_values" in cd:
+                _source(doc, cd["k_values"])
+                df = k_df(cd)
+                speeds = list(df["Design Speed (km/h)"])
+                rows = [[r["Design Speed (km/h)"], r["Crest K"], r["Sag K"]] for _, r in df.iterrows()]
+                strong = {(speeds.index(i["speed"]), 1 if i["curve_type"] == "Crest" else 2)
+                          for i in ks if i["speed"] in speeds}
+                _table(doc, ["Design speed (km/h)", "Crest K", "Sag K"], rows, strong=strong,
+                       light_rows={r for r, _ in strong})
+                doc.add_paragraph()
 
-    if hs:
-        n += 1
-        doc.add_heading(f"{n}. Horizontal Alignment (Low-Speed Urban)", level=1)
-        _table(doc, ["Design speed (km/h)", "Superelevation e (%)", "Minimum radius R (m)"],
-               [[i["speed"], i["e_val"], i["radius"]] for i in hs])
-        doc.add_paragraph()
-        doc.add_heading("AASHTO Table 3-13a (selected values highlighted)", level=2)
-        es = [float(e) for e in df_horizontal["e (%)"]]
-        cols = list(df_horizontal.columns)
-        rows = [[r[c] for c in cols] for _, r in df_horizontal.iterrows()]
-        strong = {(es.index(float(i["e_val"])), cols.index(str(i["speed"]))) for i in hs}
-        _table(doc, ["e (%)"] + [f"Vd = {c} km/h" for c in cols[1:]], rows, strong=strong,
-               light_rows={es.index(float(i["e_val"])) for i in hs})
-        doc.add_paragraph()
+        if hs:
+            n += 1
+            doc.add_heading(f"{n}. Horizontal Alignment - {code}", level=1)
+            _table(doc, ["Design speed (km/h)", "Superelevation e (%)", "Minimum radius R (m)"],
+                   [[i["speed"], i["e_val"], i["radius"]] for i in hs])
+            doc.add_paragraph()
+            if "horizontal" in cd:
+                _source(doc, cd["horizontal"])
+                df = h_df(cd)
+                es = [float(e) for e in df["e (%)"]]
+                cols = list(df.columns)
+                rows = [[r[c] for c in cols] for _, r in df.iterrows()]
+                strong = {(es.index(float(i["e_val"])), cols.index(str(i["speed"])))
+                          for i in hs if float(i["e_val"]) in es and str(i["speed"]) in cols}
+                _table(doc, ["e (%)"] + [f"Vd = {c} km/h" for c in cols[1:]], rows, strong=strong,
+                       light_rows={r for r, _ in strong})
+                doc.add_paragraph()
 
-    if ts:
-        n += 1
-        doc.add_heading(f"{n}. Turning Radius Check", level=1)
-        _table(doc, ["Design vehicle", "Symbol", "Min design radius (m)", "CTR (m)", "Min inside radius (m)"],
-               [[i["vehicle_name"], i["symbol"], i["min_r"], i["ctr"], i["inside_r"]] for i in ts])
-        doc.add_paragraph()
-        for sym in dict.fromkeys(i["symbol"] for i in ts):
-            path = vehicle_images.get(sym)
-            if path and os.path.exists(path):
-                doc.add_paragraph(f"Design vehicle {sym}:")
-                doc.add_picture(path, width=Inches(5.5))
+        if ts:
+            n += 1
+            doc.add_heading(f"{n}. Turning Radius Check - {code}", level=1)
+            _table(doc, ["Design vehicle", "Symbol", "Min design radius (m)", "CTR (m)", "Min inside radius (m)"],
+                   [[i["vehicle_name"], i["symbol"], i["min_r"], i["ctr"], i["inside_r"]] for i in ts])
+            doc.add_paragraph()
+            if "turning" in cd:
+                _source(doc, cd["turning"])
+                imgs = {v["symbol"]: v.get("image") for v in cd["turning"]["vehicles"]}
+                for sym in dict.fromkeys(i["symbol"] for i in ts):
+                    path = image_path(imgs.get(sym))
+                    if path:
+                        doc.add_paragraph(f"Design vehicle {sym}:")
+                        doc.add_picture(str(path), width=Inches(5.5))
 
     note = doc.add_paragraph("Preliminary values taken from the tool tables. Verify against the governing design code.")
     note.runs[0].italic = True
@@ -231,9 +270,9 @@ def build_docx(items, project="", prepared_by=""):
     return doc
 
 
-def docx_bytes(items, project, prepared_by):
+def docx_bytes(items, codes, project, prepared_by):
     bio = io.BytesIO()
-    build_docx(items, project, prepared_by).save(bio)
+    build_docx(items, codes, project, prepared_by).save(bio)
     return bio.getvalue()
 
 
@@ -243,22 +282,44 @@ def docx_bytes(items, project, prepared_by):
 if st.sidebar.button("🏠 Home", use_container_width=True, type="primary"):
     st.switch_page("app.py")
 st.sidebar.markdown("## 🛣️ CO-BODR")
+
+if not CODES:
+    st.error(f"No design code data found in `{DATA_DIR}`. Add the `bodr_data` folder from the project files.")
+    st.stop()
+
+
+def code_label(c):
+    n = sum(1 for s in SECTIONS if s in CODES[c])
+    return f"{c}  ({n}/{len(SECTIONS)} tables)" if n else f"{c}  (no tables yet)"
+
+
+code = st.sidebar.selectbox("📘 Design code", list(CODES), format_func=code_label)
+cd = CODES[code]
 st.sidebar.metric("Items in report", len(st.session_state.report_data))
 st.sidebar.caption("Add results with the ➕ buttons, then open the **Report** tab to download the calculation note.")
+for err in LOAD_ERRORS:
+    st.sidebar.warning(f"Could not read {err}")
 
 # ----------------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------------
 st.markdown(
-    '<div class="hero"><div class="hero-title">🛣️ CO-BODR · Highway Design Wizard</div>'
-    '<div class="hero-sub">AASHTO design values for vertical curves, horizontal curves and turning radii, '
-    'with a downloadable calculation note</div></div>',
+    f'<div class="hero"><div class="hero-title">🛣️ CO-BODR · Highway Design Wizard</div>'
+    f'<div class="hero-sub">Design code: <b>{cd.get("full_name", code)}</b> · design values for vertical curves, '
+    f'horizontal curves and turning radii, with a downloadable calculation note</div></div>',
     unsafe_allow_html=True,
 )
 
 
 def metric(label, value):
     return f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>'
+
+
+def no_table(section):
+    st.info(f"No **{section}** table has been loaded for **{code}** yet. "
+            f"Add it to `bodr_data/{code.lower()}.json` (see `bodr_data/README.md`).")
+    if cd.get("notes"):
+        st.caption(cd["notes"])
 
 
 tab_k, tab_h, tab_t, tab_r = st.tabs([
@@ -268,63 +329,81 @@ tab_k, tab_h, tab_t, tab_r = st.tabs([
 
 # ---- Vertical curves -----------------------------------------------------------
 with tab_k:
-    c1, c2 = st.columns(2)
-    curve_type = c1.selectbox("Curve type", ["Crest", "Sag"])
-    speed = c2.selectbox("Design speed [km/h]", list(k_values_data[curve_type].keys()), index=10)
-    req_k = k_values_data[curve_type][speed]
+    if "k_values" not in cd:
+        no_table("K-value")
+    else:
+        dfk = k_df(cd)
+        speeds = list(dfk["Design Speed (km/h)"])
+        c1, c2 = st.columns(2)
+        curve_type = c1.selectbox("Curve type", ["Crest", "Sag"])
+        speed = c2.selectbox("Design speed [km/h]", speeds, index=pick_index(speeds, 100))
+        req_k = dfk.loc[dfk["Design Speed (km/h)"] == speed, f"{curve_type} K"].values[0]
+        req_k = int(req_k) if float(req_k).is_integer() else float(req_k)
 
-    st.markdown(metric("Required minimum K-value", req_k), unsafe_allow_html=True)
-    st.write("")
-    if st.button("➕ Add to report", type="primary", key="add_k"):
-        add_item({"tool": "K-Value", "curve_type": curve_type, "speed": int(speed), "k_value": int(req_k)})
+        st.markdown(metric("Required minimum K-value", req_k), unsafe_allow_html=True)
+        st.write("")
+        if st.button("➕ Add to report", type="primary", key="add_k"):
+            add_item({"code": code, "tool": "K-Value", "curve_type": curve_type, "speed": int(speed), "k_value": req_k})
 
-    st.markdown("##### Reference table")
-    st.dataframe(highlight(df_k, lambda r: r["Design Speed (km/h)"] == speed, [f"{curve_type} K"]),
-                 hide_index=True, use_container_width=True, height=35 * (len(df_k) + 1) + 3)
+        st.markdown(f"##### Reference table · {cd['k_values'].get('source', '')}")
+        st.dataframe(highlight(dfk, lambda r: r["Design Speed (km/h)"] == speed, [f"{curve_type} K"]),
+                     hide_index=True, use_container_width=True, height=35 * (len(dfk) + 1) + 3)
 
 # ---- Horizontal curves ---------------------------------------------------------
 with tab_h:
-    st.caption("Based on AASHTO Table 3-13a: minimum radii for low-speed urban streets (up to 70 km/h).")
-    c1, c2 = st.columns(2)
-    v_design = c1.selectbox("Design speed (Vd) [km/h]", H_SPEEDS, index=3)
-    e_val = c2.selectbox("Superelevation (e) [%]", df_horizontal["e (%)"].tolist(), index=6)
-    radius = int(df_horizontal.loc[df_horizontal["e (%)"] == e_val, v_design].values[0])
+    if "horizontal" not in cd:
+        no_table("horizontal radius")
+    else:
+        dfh = h_df(cd)
+        h_speeds = [c for c in dfh.columns if c != "e (%)"]
+        e_list = dfh["e (%)"].tolist()
+        st.caption(f"{cd['horizontal'].get('source', '')}: {cd['horizontal'].get('title', '')}")
+        c1, c2 = st.columns(2)
+        v_design = c1.selectbox("Design speed (Vd) [km/h]", h_speeds, index=pick_index(h_speeds, "50"))
+        e_val = c2.selectbox("Superelevation (e) [%]", e_list, index=pick_index(e_list, 0.0))
+        radius = dfh.loc[dfh["e (%)"] == e_val, v_design].values[0]
+        radius = int(radius) if float(radius).is_integer() else float(radius)
 
-    st.markdown(metric("Minimum curve radius (R)", f"{radius} m"), unsafe_allow_html=True)
-    st.write("")
-    if st.button("➕ Add to report", type="primary", key="add_h"):
-        add_item({"tool": "Horizontal Radius", "speed": v_design, "e_val": str(e_val), "radius": radius})
+        st.markdown(metric("Minimum curve radius (R)", f"{radius} m"), unsafe_allow_html=True)
+        st.write("")
+        if st.button("➕ Add to report", type="primary", key="add_h"):
+            add_item({"code": code, "tool": "Horizontal Radius", "speed": v_design, "e_val": str(e_val),
+                      "radius": radius})
 
-    st.markdown("##### AASHTO Table 3-13a")
-    show = df_horizontal.rename(columns={c: f"{c} km/h" for c in H_SPEEDS})
-    st.dataframe(
-        highlight(show, lambda r: r["e (%)"] == e_val, [f"{v_design} km/h"]).format({"e (%)": "{:.1f}"}),
-        hide_index=True, use_container_width=True, height=35 * (len(show) + 1) + 3)
+        st.markdown(f"##### {cd['horizontal'].get('source', 'Table')}")
+        show = dfh.rename(columns={c: f"{c} km/h" for c in h_speeds})
+        st.dataframe(
+            highlight(show, lambda r: r["e (%)"] == e_val, [f"{v_design} km/h"]).format({"e (%)": "{:.1f}"}),
+            hide_index=True, use_container_width=True, height=35 * (len(show) + 1) + 3)
 
 # ---- Turning radius ------------------------------------------------------------
 with tab_t:
-    names = df_turning["Design Vehicle Type"] + " (" + df_turning["Symbol"] + ")"
-    selected_display = st.selectbox("Design vehicle", names)
-    selected_symbol = selected_display.split("(")[-1].replace(")", "")
-    v = df_turning[df_turning["Symbol"] == selected_symbol].iloc[0]
+    if "turning" not in cd:
+        no_table("turning radius")
+    else:
+        dft = t_df(cd)
+        names = dft["Design Vehicle Type"] + " (" + dft["Symbol"] + ")"
+        selected_display = st.selectbox("Design vehicle", names)
+        selected_symbol = selected_display.split("(")[-1].replace(")", "")
+        v = dft[dft["Symbol"] == selected_symbol].iloc[0]
 
-    m1, m2, m3 = st.columns(3)
-    m1.markdown(metric("Min design radius", f"{v['Min Design Turning Radius (m)']} m"), unsafe_allow_html=True)
-    m2.markdown(metric("Centerline radius (CTR)", f"{v['Centerline Radius (CTR) (m)']} m"), unsafe_allow_html=True)
-    m3.markdown(metric("Min inside radius", f"{v['Min Inside Radius (m)']} m"), unsafe_allow_html=True)
-    st.write("")
-    if st.button("➕ Add to report", type="primary", key="add_t"):
-        add_item({"tool": "Turning Radius", "vehicle_name": v["Design Vehicle Type"], "symbol": selected_symbol,
-                  "min_r": float(v["Min Design Turning Radius (m)"]), "ctr": float(v["Centerline Radius (CTR) (m)"]),
-                  "inside_r": float(v["Min Inside Radius (m)"])})
+        m1, m2, m3 = st.columns(3)
+        m1.markdown(metric("Min design radius", f"{v['Min Design Turning Radius (m)']} m"), unsafe_allow_html=True)
+        m2.markdown(metric("Centerline radius (CTR)", f"{v['Centerline Radius (CTR) (m)']} m"), unsafe_allow_html=True)
+        m3.markdown(metric("Min inside radius", f"{v['Min Inside Radius (m)']} m"), unsafe_allow_html=True)
+        st.write("")
+        if st.button("➕ Add to report", type="primary", key="add_t"):
+            add_item({"code": code, "tool": "Turning Radius", "vehicle_name": v["Design Vehicle Type"],
+                      "symbol": selected_symbol, "min_r": float(v["Min Design Turning Radius (m)"]),
+                      "ctr": float(v["Centerline Radius (CTR) (m)"]), "inside_r": float(v["Min Inside Radius (m)"])})
 
-    img = vehicle_images.get(selected_symbol)
-    if img and os.path.exists(img):
-        st.image(img, caption=f"{selected_symbol} turning path", width=620)
-    st.markdown("##### Design vehicles")
-    st.dataframe(highlight(df_turning, lambda r: r["Symbol"] == selected_symbol,
-                           ["Min Design Turning Radius (m)"]).format(precision=2),
-                 hide_index=True, use_container_width=True)
+        img = image_path(v["image"])
+        if img:
+            st.image(str(img), caption=f"{selected_symbol} turning path", width=620)
+        st.markdown(f"##### Design vehicles · {cd['turning'].get('source', '')}")
+        st.dataframe(highlight(dft.drop(columns=["image"]), lambda r: r["Symbol"] == selected_symbol,
+                               ["Min Design Turning Radius (m)"]).format(precision=2),
+                     hide_index=True, use_container_width=True)
 
 # ---- Report ----------------------------------------------------------------------
 with tab_r:
@@ -345,7 +424,7 @@ with tab_r:
                          help="Remove from report", use_container_width=True)
         d1, d2 = st.columns([3, 1])
         try:
-            d1.download_button("⬇️ Download calculation note (Word)", docx_bytes(items, project, prepared_by),
+            d1.download_button("⬇️ Download calculation note (Word)", docx_bytes(items, CODES, project, prepared_by),
                                "Calculation_Note.docx",
                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                type="primary", use_container_width=True)
