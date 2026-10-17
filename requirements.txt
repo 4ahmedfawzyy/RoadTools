@@ -3,3 +3,4 @@ pandas
 ezdxf
 python-docx
 streamlit-option-menu
+XlsxWriter
