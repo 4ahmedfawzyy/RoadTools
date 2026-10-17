@@ -4,13 +4,18 @@ import json
 import uuid
 from pathlib import Path
 
+import matplotlib
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 from docx.shared import Inches, Pt, RGBColor
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
 
 st.set_page_config(page_title="CO-BODR Engineering", layout="wide", page_icon="🛣️")
 
@@ -111,6 +116,167 @@ def highlight(df, row_mask, strong_cols=()):
 
 
 # ----------------------------------------------------------------------------
+# Typical cross section: geometry and drawing
+# ----------------------------------------------------------------------------
+SEG_COLORS = {"lane": "#4a4a4a", "shoulder": "#9a9a9a", "median": "#5aa85a", "footpath": "#d8c27a",
+              "verge": "#7cb342", "slope": "#a8754a", "kerb": "#222222"}
+
+
+def _side_elements(side, p):
+    """Elements from the centre outward: (name, kind, width, cross-fall % falling outward, kerb rise)."""
+    els = []
+    if p["divided"] and side["inner_sh"] > 0:
+        els.append(("Inner shoulder", "shoulder", side["inner_sh"], p["ss"], 0.0))
+    for i in range(int(side["lanes"])):
+        els.append((f"Lane {i + 1}", "lane", p["lane_w"], p["sc"], 0.0))
+    if side["outer_sh"] > 0:
+        els.append(("Outer shoulder", "shoulder", side["outer_sh"], p["ss"], 0.0))
+    if side["footpath"] > 0:
+        els.append(("Footpath", "footpath", side["footpath"], -p["sf"], p["kerb"]))  # falls toward the road
+    if side["verge"] > 0:
+        els.append(("Verge", "verge", side["verge"], p["sf"], 0.0))
+    return els
+
+
+def _build_side(side, p, x0):
+    segs, x, y = [], x0, 0.0
+    for name, kind, w, slope, kerb in _side_elements(side, p):
+        if kerb:
+            segs.append(dict(name="Kerb", kind="kerb", x0=x, y0=y, x1=x, y1=y + kerb, width=0.0, slope=None))
+            y += kerb
+        y1 = y - slope / 100 * w
+        segs.append(dict(name=name, kind=kind, x0=x, y0=y, x1=x + w, y1=y1, width=w, slope=slope))
+        x, y = x + w, y1
+    rs = p["roadside"]
+    if rs["type"] != "None" and rs["h"] > 0 and rs["n"] > 0:
+        dx = rs["n"] * rs["h"]
+        dy = -rs["h"] if rs["type"] == "Fill" else rs["h"]
+        segs.append(dict(name=f"{rs['type']} 1:{rs['n']:g}", kind="slope",
+                         x0=x, y0=y, x1=x + dx, y1=y + dy, width=dx, slope=None))
+    return segs
+
+
+def _mirror(segs):
+    return [dict(s, x0=-s["x1"], y0=s["y1"], x1=-s["x0"], y1=s["y0"]) for s in reversed(segs)]
+
+
+def build_section(p):
+    """Return the segments of the whole section from left to right."""
+    x0 = p["median"] / 2 if p["divided"] else 0.0
+    right = _build_side(p["right"], p, x0)
+    left = _mirror(_build_side(p["right"] if p["mirror"] else p["left"], p, x0))
+    mid = []
+    if p["divided"] and x0 > 0:
+        mid = [dict(name="Median", kind="median", x0=-x0, y0=0.0, x1=x0, y1=0.0, width=2 * x0, slope=0.0)]
+    return left + mid + right
+
+
+def section_totals(segs):
+    def w(kinds):
+        return sum(s["width"] for s in segs if s["kind"] in kinds)
+    return {
+        "lanes": sum(1 for s in segs if s["kind"] == "lane"),
+        "carriageway": w({"lane"}),
+        "paved": w({"lane", "shoulder"}),
+        "median": w({"median"}),
+        "formation": w({"lane", "shoulder", "median", "footpath", "verge"}),
+        "overall": w(set(SEG_COLORS) - {"kerb"}),
+    }
+
+
+def crossfall_text(s):
+    if s["slope"] is None:
+        return "-"
+    return f"{abs(s['slope']):.1f} (to road)" if s["kind"] == "footpath" else f"{s['slope']:.1f}"
+
+
+def draw_section(segs, ve=3.0):
+    """2D sketch (matplotlib). Heights are exaggerated by `ve` for readability."""
+    fig = plt.figure(figsize=(12, 5.4))
+    gs = fig.add_gridspec(2, 1, height_ratios=[2.0, 1.6], hspace=0.04)
+    ax, lab = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
+
+    xmin = min(min(s["x0"], s["x1"]) for s in segs)
+    xmax = max(max(s["x0"], s["x1"]) for s in segs)
+    total = max(xmax - xmin, 1e-6)
+    ymin = min(min(s["y0"], s["y1"]) for s in segs)
+    ymax = max(max(s["y0"], s["y1"]) for s in segs)
+    yb = (ymin - 0.45) * ve  # base of the (illustrative) pavement body
+
+    for s in segs:
+        if s["kind"] == "kerb":
+            continue
+        ax.fill([s["x0"], s["x1"], s["x1"], s["x0"]], [s["y0"] * ve, s["y1"] * ve, yb, yb],
+                color=SEG_COLORS[s["kind"]], lw=0)
+    pts = [(segs[0]["x0"], segs[0]["y0"])] + [(s["x1"], s["y1"]) for s in segs]
+    ax.plot([p[0] for p in pts], [p[1] * ve for p in pts], color="black", lw=1.6)
+
+    for a, b in zip(segs, segs[1:]):  # lane dividers
+        if a["kind"] == "lane" and b["kind"] == "lane":
+            ax.plot([a["x1"]] * 2, [a["y1"] * ve, yb], ls=":", color="white", lw=0.9)
+    if not any(s["kind"] == "median" for s in segs):
+        ax.annotate("CL", (0, 0), xytext=(0, 9), textcoords="offset points", ha="center", fontsize=8)
+
+    for s in segs:  # cross-fall labels
+        if s["slope"] is not None and s["kind"] != "median" and s["width"] / total > 0.04:
+            ax.annotate(f"{abs(s['slope']):.1f}%", ((s["x0"] + s["x1"]) / 2, (s["y0"] + s["y1"]) / 2 * ve),
+                        xytext=(0, 6), textcoords="offset points", ha="center", fontsize=7, color="#333333")
+
+    ax.plot([xmin - 0.03 * total, xmax + 0.03 * total], [yb - 0.02 * total, ymax * ve + 0.06 * total],
+            alpha=0)  # invisible points that set the drawing extent
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.axis("off")
+    fig.canvas.draw()
+
+    lab.set_xlim(ax.get_xlim())
+    lab.set_ylim(0, 1)
+    lab.axis("off")
+    for s in segs:
+        if s["kind"] == "kerb" or s["width"] <= 0.01:
+            continue
+        xm = (s["x0"] + s["x1"]) / 2
+        if s["width"] / total < 0.0075 * len(s["name"]):  # long names on narrow elements are rotated
+            lab.text(xm, 0.98, f"{s['name']}  {s['width']:.2f}", ha="center", va="top", rotation=90, fontsize=7)
+        else:
+            lab.text(xm, 0.98, f"{s['name']}\n{s['width']:.2f} m", ha="center", va="top", fontsize=8)
+    fx = [s for s in segs if s["kind"] not in ("slope", "kerb")]
+    fmin, fmax = min(min(s["x0"], s["x1"]) for s in fx), max(max(s["x0"], s["x1"]) for s in fx)
+    if abs((fmax - fmin) - total) > 0.01:
+        lab.annotate("", xy=(fmin, 0.33), xytext=(fmax, 0.33), arrowprops=dict(arrowstyle="<->", lw=1, color="#1F3864"))
+        lab.text((fmin + fmax) / 2, 0.26, f"Formation width {fmax - fmin:.2f} m", ha="center", va="top",
+                 fontsize=8, color="#1F3864")
+    lab.annotate("", xy=(xmin, 0.13), xytext=(xmax, 0.13), arrowprops=dict(arrowstyle="<->", lw=1.2))
+    lab.text((xmin + xmax) / 2, 0.07, f"Overall width {total:.2f} m", ha="center", va="top", fontsize=9, weight="bold")
+    fig.suptitle(f"Typical cross section · heights exaggerated x{ve:g}", fontsize=9, y=0.93)
+    return fig
+
+
+def make_3d(segs, ve=3.0, length=30.0):
+    fig = go.Figure()
+    for s in segs:
+        fig.add_trace(go.Mesh3d(
+            x=[s["x0"], s["x1"], s["x1"], s["x0"]], y=[0, 0, length, length],
+            z=[s["y0"] * ve, s["y1"] * ve, s["y1"] * ve, s["y0"] * ve],
+            i=[0, 0], j=[1, 2], k=[2, 3], color=SEG_COLORS[s["kind"]], flatshading=True,
+            hoverinfo="text", hovertext=f"{s['name']}: {s['width']:.2f} m", showlegend=False))
+    for a, b in zip(segs, segs[1:]):  # lane dividers
+        if a["kind"] == "lane" and b["kind"] == "lane":
+            z = a["y1"] * ve + 0.01
+            fig.add_trace(go.Scatter3d(x=[a["x1"]] * 2, y=[0, length], z=[z, z], mode="lines",
+                                       line=dict(color="white", width=3, dash="dash"),
+                                       hoverinfo="skip", showlegend=False))
+    px = [segs[0]["x0"]] + [s["x1"] for s in segs]
+    pz = [segs[0]["y0"] * ve] + [s["y1"] * ve for s in segs]
+    fig.add_trace(go.Scatter3d(x=px, y=[0] * len(px), z=pz, mode="lines", line=dict(color="black", width=4),
+                               hoverinfo="skip", showlegend=False))
+    fig.update_layout(height=520, margin=dict(l=0, r=0, t=10, b=0),
+                      scene=dict(aspectmode="data", xaxis_title="Offset (m)",
+                                 yaxis=dict(visible=False), zaxis=dict(visible=False),
+                                 camera=dict(eye=dict(x=0.15, y=-1.7, z=0.8))))
+    return fig
+
+
+# ----------------------------------------------------------------------------
 # Report model
 # ----------------------------------------------------------------------------
 if "report_data" not in st.session_state:
@@ -135,6 +301,11 @@ def clear_items():
 
 
 def describe(item):
+    if item["tool"] == "Cross Section":
+        tot = section_totals(build_section(item["params"]))
+        return (f"🧱 **Typical cross section** · {item['name']}",
+                f"{tot['lanes']} lanes · carriageway {tot['carriageway']:.2f} m · "
+                f"formation {tot['formation']:.2f} m · overall {tot['overall']:.2f} m")
     code = item.get("code", "AASHTO")
     if item["tool"] == "K-Value":
         return (f"📈 **K-value** · {code} · {item['curve_type']} · {item['speed']} km/h",
@@ -196,7 +367,7 @@ def build_docx(items, codes, project="", prepared_by=""):
     doc.styles["Normal"].font.size = Pt(10.5)
     doc.add_heading("CO-BODR - Calculation Note", 0)
 
-    used = list(dict.fromkeys(i.get("code", "AASHTO") for i in items))
+    used = list(dict.fromkeys(i.get("code", "AASHTO") for i in items if i["tool"] != "Cross Section"))
     info = doc.add_table(rows=0, cols=2)
     info.style = "Table Grid"
     for label, value in (("Project", project or "-"), ("Prepared by", prepared_by or "-"),
@@ -269,6 +440,29 @@ def build_docx(items, codes, project="", prepared_by=""):
                         doc.add_paragraph(f"Design vehicle {sym}:")
                         doc.add_picture(str(path), width=Inches(5.5))
 
+    xs = [i for i in items if i["tool"] == "Cross Section"]
+    if xs:
+        n += 1
+        doc.add_heading(f"{n}. Typical Cross Section", level=1)
+        for it in xs:
+            segs = build_section(it["params"])
+            tot = section_totals(segs)
+            doc.add_paragraph().add_run(it["name"]).bold = True
+            _table(doc, ["Element", "Width (m)", "Cross-fall (%)"],
+                   [[s["name"], f"{s['width']:.2f}", crossfall_text(s)] for s in segs if s["kind"] != "kerb"])
+            doc.add_paragraph()
+            _table(doc, ["Lanes", "Carriageway (m)", "Paved incl. shoulders (m)", "Formation (m)", "Overall (m)"],
+                   [[tot["lanes"], f"{tot['carriageway']:.2f}", f"{tot['paved']:.2f}",
+                     f"{tot['formation']:.2f}", f"{tot['overall']:.2f}"]])
+            doc.add_paragraph()
+            fig = draw_section(segs, it["params"]["ve"])
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
+            plt.close(fig)
+            buf.seek(0)
+            doc.add_picture(buf, width=Inches(6.3))
+            doc.add_paragraph()
+
     note = doc.add_paragraph("Preliminary values taken from the tool tables. Verify against the governing design code.")
     note.runs[0].italic = True
     note.runs[0].font.size = Pt(9)
@@ -311,7 +505,7 @@ for err in LOAD_ERRORS:
 st.markdown(
     f'<div class="hero"><div class="hero-title">🛣️ CO-BODR · Highway Design Wizard</div>'
     f'<div class="hero-sub">Design code: <b>{cd.get("full_name", code)}</b> · design values for vertical curves, '
-    f'horizontal curves and turning radii, with a downloadable calculation note</div></div>',
+    f'horizontal curves, turning radii and typical cross sections, with a downloadable calculation note</div></div>',
     unsafe_allow_html=True,
 )
 
@@ -327,8 +521,8 @@ def no_table(section):
         st.caption(cd["notes"])
 
 
-tab_k, tab_h, tab_t, tab_r = st.tabs([
-    "📈 Vertical Curves (K)", "🔄 Horizontal Curves (R)", "📐 Turning Radius",
+tab_k, tab_h, tab_t, tab_x, tab_r = st.tabs([
+    "📈 Vertical Curves (K)", "🔄 Horizontal Curves (R)", "📐 Turning Radius", "🧱 Cross Section",
     f"🧾 Report ({len(st.session_state.report_data)})",
 ])
 
@@ -409,6 +603,79 @@ with tab_t:
         st.dataframe(highlight(dft.drop(columns=["image"]), lambda r: r["Symbol"] == selected_symbol,
                                ["Min Design Turning Radius (m)"]).format(precision=2),
                      hide_index=True, use_container_width=True)
+
+# ---- Typical cross section -------------------------------------------------------
+with tab_x:
+    st.caption("Build a typical cross section. The sketch updates as you change the inputs. "
+               "Widths in metres, cross-falls in % (positive = falls away from the centre).")
+    col_in, col_out = st.columns([1, 1.5], gap="large")
+
+    with col_in:
+        xs_name = st.text_input("Section name", "Typical Section A", key="xs_name")
+        with st.expander("General", expanded=True):
+            divided = st.toggle("Divided carriageway (with median)", value=True, key="xs_div")
+            median = st.number_input("Median width (m)", 0.0, 30.0, 3.0, 0.1, key="xs_med", disabled=not divided)
+            lane_w = st.number_input("Lane width (m)", 2.5, 4.5, 3.5, 0.05, key="xs_lw")
+        mirror = st.checkbox("Same on both sides (mirror the right side)", value=True, key="xs_mirror")
+
+        def side_inputs(label, key, expanded):
+            with st.expander(label, expanded=expanded):
+                lanes = st.number_input("Number of lanes", 1, 6, 2, 1, key=f"xs_{key}_lanes")
+                inner = st.number_input("Inner shoulder (m)", 0.0, 6.0, 1.0, 0.1, key=f"xs_{key}_in",
+                                        disabled=not divided)
+                outer = st.number_input("Outer shoulder (m)", 0.0, 6.0, 2.5, 0.1, key=f"xs_{key}_out")
+                foot = st.number_input("Footpath (m)", 0.0, 8.0, 0.0, 0.1, key=f"xs_{key}_foot")
+                verge = st.number_input("Verge / landscape strip (m)", 0.0, 10.0, 0.0, 0.1, key=f"xs_{key}_verge")
+            return {"lanes": int(lanes), "inner_sh": inner, "outer_sh": outer, "footpath": foot, "verge": verge}
+
+        right_side = side_inputs("Right side", "r", True)
+        left_side = right_side if mirror else side_inputs("Left side", "l", True)
+
+        with st.expander("Cross-falls and roadside", expanded=False):
+            sc = st.number_input("Carriageway cross-fall (%)", 0.0, 8.0, 2.0, 0.1, key="xs_sc")
+            ss = st.number_input("Shoulder cross-fall (%)", 0.0, 10.0, 4.0, 0.1, key="xs_ss")
+            sf = st.number_input("Footpath / verge cross-fall (%)", 0.0, 8.0, 2.0, 0.1, key="xs_sf")
+            kerb = st.number_input("Kerb height at footpath (m)", 0.0, 0.5, 0.15, 0.01, key="xs_kerb")
+            rs_type = st.selectbox("Roadside slope", ["None", "Fill", "Cut"], index=1, key="xs_rs")
+            rs_h = st.number_input("Slope height (m)", 0.0, 20.0, 1.5, 0.1, key="xs_rsh", disabled=rs_type == "None")
+            rs_n = st.number_input("Slope 1V : nH, n =", 0.5, 10.0, 3.0, 0.5, key="xs_rsn", disabled=rs_type == "None")
+
+        view = st.radio("View", ["2D section", "3D view"], horizontal=True, key="xs_view")
+        ve = st.slider("Height exaggeration (display only)", 1, 10, 3, key="xs_ve")
+
+    params = {"divided": bool(divided), "median": float(median), "lane_w": float(lane_w), "mirror": bool(mirror),
+              "right": right_side, "left": left_side, "sc": float(sc), "ss": float(ss), "sf": float(sf),
+              "kerb": float(kerb), "roadside": {"type": rs_type, "h": float(rs_h), "n": float(rs_n)}, "ve": int(ve)}
+    segs = build_section(params)
+    tot = section_totals(segs)
+
+    with col_out:
+        if not segs:
+            st.info("Add at least one lane to see the section.")
+        else:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Lanes", tot["lanes"])
+            m2.metric("Carriageway (m)", f"{tot['carriageway']:.2f}")
+            m3.metric("Paved incl. shoulders (m)", f"{tot['paved']:.2f}")
+            m4, m5, m6 = st.columns(3)
+            m4.metric("Median (m)", f"{tot['median']:.2f}")
+            m5.metric("Formation (m)", f"{tot['formation']:.2f}")
+            m6.metric("Overall incl. slopes (m)", f"{tot['overall']:.2f}")
+
+            if view == "2D section":
+                fig2d = draw_section(segs, ve)
+                st.pyplot(fig2d, use_container_width=True)
+                plt.close(fig2d)
+            else:
+                st.plotly_chart(make_3d(segs, ve), use_container_width=True)
+
+            with st.expander("Element table"):
+                st.dataframe(pd.DataFrame([{"Element": s["name"], "Width (m)": round(s["width"], 2),
+                                            "Cross-fall (%)": crossfall_text(s)}
+                                           for s in segs if s["kind"] != "kerb"]),
+                             hide_index=True, use_container_width=True)
+            if st.button("➕ Add to report", type="primary", key="add_x"):
+                add_item({"tool": "Cross Section", "name": xs_name.strip() or "Typical section", "params": params})
 
 # ---- Report ----------------------------------------------------------------------
 with tab_r:
