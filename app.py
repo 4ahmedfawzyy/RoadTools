@@ -164,7 +164,7 @@ with col2:
                 <li>K-values by design speed</li>
                 <li>Horizontal radii by speed and superelevation</li>
                 <li>Vehicle turning radius</li>
-                <li>Design code selector: AASHTO, ADM, MOMRA</li>
+                <li>Typical cross-section builder with 2D and 3D sketch</li>
                 <li>Word calculation note export</li>
             </ul>
             <div class="chips"><span class="chip">AASHTO</span><span class="chip">Abu Dhabi (ADM)</span><span class="chip">MOMRA</span></div>
