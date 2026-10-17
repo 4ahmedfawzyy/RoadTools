@@ -127,8 +127,8 @@ def _side_elements(side, p):
     els = []
     if p["divided"] and side["inner_sh"] > 0:
         els.append(("Inner shoulder", "shoulder", side["inner_sh"], p["ss"], 0.0))
-    for i in range(int(side["lanes"])):
-        els.append((f"Lane {i + 1}", "lane", p["lane_w"], p["sc"], 0.0))
+    for i, lw in enumerate(side["lane_widths"]):
+        els.append((f"Lane {i + 1}", "lane", lw, p["sc"], 0.0))
     if side["outer_sh"] > 0:
         els.append(("Outer shoulder", "shoulder", side["outer_sh"], p["ss"], 0.0))
     if side["footpath"] > 0:
@@ -147,12 +147,6 @@ def _build_side(side, p, x0):
         y1 = y - slope / 100 * w
         segs.append(dict(name=name, kind=kind, x0=x, y0=y, x1=x + w, y1=y1, width=w, slope=slope))
         x, y = x + w, y1
-    rs = p["roadside"]
-    if rs["type"] != "None" and rs["h"] > 0 and rs["n"] > 0:
-        dx = rs["n"] * rs["h"]
-        dy = -rs["h"] if rs["type"] == "Fill" else rs["h"]
-        segs.append(dict(name=f"{rs['type']} 1:{rs['n']:g}", kind="slope",
-                         x0=x, y0=y, x1=x + dx, y1=y + dy, width=dx, slope=None))
     return segs
 
 
@@ -179,6 +173,7 @@ def section_totals(segs):
         "carriageway": w({"lane"}),
         "paved": w({"lane", "shoulder"}),
         "median": w({"median"}),
+        "footpath": w({"footpath"}),
         "formation": w({"lane", "shoulder", "median", "footpath", "verge"}),
         "overall": w(set(SEG_COLORS) - {"kerb"}),
     }
@@ -305,7 +300,7 @@ def describe(item):
         tot = section_totals(build_section(item["params"]))
         return (f"🧱 **Typical cross section** · {item['name']}",
                 f"{tot['lanes']} lanes · carriageway {tot['carriageway']:.2f} m · "
-                f"formation {tot['formation']:.2f} m · overall {tot['overall']:.2f} m")
+                f"total width {tot['overall']:.2f} m")
     code = item.get("code", "AASHTO")
     if item["tool"] == "K-Value":
         return (f"📈 **K-value** · {code} · {item['curve_type']} · {item['speed']} km/h",
@@ -451,9 +446,8 @@ def build_docx(items, codes, project="", prepared_by=""):
             _table(doc, ["Element", "Width (m)", "Cross-fall (%)"],
                    [[s["name"], f"{s['width']:.2f}", crossfall_text(s)] for s in segs if s["kind"] != "kerb"])
             doc.add_paragraph()
-            _table(doc, ["Lanes", "Carriageway (m)", "Paved incl. shoulders (m)", "Formation (m)", "Overall (m)"],
-                   [[tot["lanes"], f"{tot['carriageway']:.2f}", f"{tot['paved']:.2f}",
-                     f"{tot['formation']:.2f}", f"{tot['overall']:.2f}"]])
+            _table(doc, ["Lanes", "Carriageway (m)", "Paved incl. shoulders (m)", "Total width (m)"],
+                   [[tot["lanes"], f"{tot['carriageway']:.2f}", f"{tot['paved']:.2f}", f"{tot['overall']:.2f}"]])
             doc.add_paragraph()
             fig = draw_section(segs, it["params"]["ve"])
             buf = io.BytesIO()
@@ -606,8 +600,9 @@ with tab_t:
 
 # ---- Typical cross section -------------------------------------------------------
 with tab_x:
-    st.caption("Build a typical cross section. The sketch updates as you change the inputs. "
-               "Widths in metres, cross-falls in % (positive = falls away from the centre).")
+    st.caption("Urban typical cross section. The sketch updates as you change the inputs. "
+               "Widths in metres, cross-falls in % (positive = falls away from the centre). "
+               "Lane 1 is the lane nearest the centre line or median.")
     col_in, col_out = st.columns([1, 1.5], gap="large")
 
     with col_in:
@@ -615,37 +610,43 @@ with tab_x:
         with st.expander("General", expanded=True):
             divided = st.toggle("Divided carriageway (with median)", value=True, key="xs_div")
             median = st.number_input("Median width (m)", 0.0, 30.0, 3.0, 0.1, key="xs_med", disabled=not divided)
-            lane_w = st.number_input("Lane width (m)", 2.5, 4.5, 3.5, 0.05, key="xs_lw")
         mirror = st.checkbox("Same on both sides (mirror the right side)", value=True, key="xs_mirror")
 
         def side_inputs(label, key, expanded):
             with st.expander(label, expanded=expanded):
-                lanes = st.number_input("Number of lanes", 1, 6, 2, 1, key=f"xs_{key}_lanes")
-                inner = st.number_input("Inner shoulder (m)", 0.0, 6.0, 1.0, 0.1, key=f"xs_{key}_in",
+                n = int(st.number_input("Number of lanes", 1, 6, 2, 1, key=f"xs_{key}_lanes"))
+                same = st.checkbox("Same width for all lanes", value=True, key=f"xs_{key}_same")
+                if same:
+                    w = st.number_input("Lane width (m)", 2.5, 5.0, 3.5, 0.05, key=f"xs_{key}_lw")
+                    widths = [w] * n
+                else:
+                    widths, cols = [], st.columns(2)
+                    for i in range(n):
+                        widths.append(cols[i % 2].number_input(f"Lane {i + 1} width (m)", 2.5, 5.0, 3.5, 0.05,
+                                                               key=f"xs_{key}_lw{i}"))
+                inner = st.number_input("Inner shoulder (m)", 0.0, 6.0, 0.0, 0.1, key=f"xs_{key}_in",
                                         disabled=not divided)
-                outer = st.number_input("Outer shoulder (m)", 0.0, 6.0, 2.5, 0.1, key=f"xs_{key}_out")
-                foot = st.number_input("Footpath (m)", 0.0, 8.0, 0.0, 0.1, key=f"xs_{key}_foot")
+                outer = st.number_input("Outer shoulder / parking (m)", 0.0, 6.0, 0.0, 0.1, key=f"xs_{key}_out")
+                foot = st.number_input("Footpath (m)", 0.0, 8.0, 2.0, 0.1, key=f"xs_{key}_foot")
                 verge = st.number_input("Verge / landscape strip (m)", 0.0, 10.0, 0.0, 0.1, key=f"xs_{key}_verge")
-            return {"lanes": int(lanes), "inner_sh": inner, "outer_sh": outer, "footpath": foot, "verge": verge}
+            return {"lane_widths": [float(x) for x in widths], "inner_sh": inner, "outer_sh": outer,
+                    "footpath": foot, "verge": verge}
 
         right_side = side_inputs("Right side", "r", True)
         left_side = right_side if mirror else side_inputs("Left side", "l", True)
 
-        with st.expander("Cross-falls and roadside", expanded=False):
+        with st.expander("Cross-falls", expanded=False):
             sc = st.number_input("Carriageway cross-fall (%)", 0.0, 8.0, 2.0, 0.1, key="xs_sc")
-            ss = st.number_input("Shoulder cross-fall (%)", 0.0, 10.0, 4.0, 0.1, key="xs_ss")
+            ss = st.number_input("Shoulder cross-fall (%)", 0.0, 10.0, 2.0, 0.1, key="xs_ss")
             sf = st.number_input("Footpath / verge cross-fall (%)", 0.0, 8.0, 2.0, 0.1, key="xs_sf")
             kerb = st.number_input("Kerb height at footpath (m)", 0.0, 0.5, 0.15, 0.01, key="xs_kerb")
-            rs_type = st.selectbox("Roadside slope", ["None", "Fill", "Cut"], index=1, key="xs_rs")
-            rs_h = st.number_input("Slope height (m)", 0.0, 20.0, 1.5, 0.1, key="xs_rsh", disabled=rs_type == "None")
-            rs_n = st.number_input("Slope 1V : nH, n =", 0.5, 10.0, 3.0, 0.5, key="xs_rsn", disabled=rs_type == "None")
 
         view = st.radio("View", ["2D section", "3D view"], horizontal=True, key="xs_view")
         ve = st.slider("Height exaggeration (display only)", 1, 10, 3, key="xs_ve")
 
-    params = {"divided": bool(divided), "median": float(median), "lane_w": float(lane_w), "mirror": bool(mirror),
+    params = {"divided": bool(divided), "median": float(median), "mirror": bool(mirror),
               "right": right_side, "left": left_side, "sc": float(sc), "ss": float(ss), "sf": float(sf),
-              "kerb": float(kerb), "roadside": {"type": rs_type, "h": float(rs_h), "n": float(rs_n)}, "ve": int(ve)}
+              "kerb": float(kerb), "ve": int(ve)}
     segs = build_section(params)
     tot = section_totals(segs)
 
@@ -659,8 +660,8 @@ with tab_x:
             m3.metric("Paved incl. shoulders (m)", f"{tot['paved']:.2f}")
             m4, m5, m6 = st.columns(3)
             m4.metric("Median (m)", f"{tot['median']:.2f}")
-            m5.metric("Formation (m)", f"{tot['formation']:.2f}")
-            m6.metric("Overall incl. slopes (m)", f"{tot['overall']:.2f}")
+            m5.metric("Footpaths (m)", f"{tot['footpath']:.2f}")
+            m6.metric("Total width (m)", f"{tot['overall']:.2f}")
 
             if view == "2D section":
                 fig2d = draw_section(segs, ve)
