@@ -46,10 +46,10 @@ aashto_db = {
 
 manual_limits = {}
 if criteria_mode == "Manual Custom Limits":
-    st.sidebar.info("💡 Enter your custom design limits below:")
+    st.sidebar.info("💡 Enter your custom project design limits:")
     manual_limits['max_grade'] = st.sidebar.number_input("Max Longitudinal Slope (%)", value=5.0, step=0.5, format="%.2f")
-    manual_limits['min_grade'] = st.sidebar.number_input("Min Longitudinal Slope (%)", value=0.5, step=0.1, format="%.2f")
-    manual_limits['min_radius'] = st.sidebar.number_input("Min Horizontal Radius (m)", value=230.0, step=1.0, format="%.2f")
+    manual_limits['min_grade'] = st.sidebar.number_input("Min Longitudinal Slope (%)", value=0.3, step=0.1, format="%.2f")
+    manual_limits['min_radius'] = st.sidebar.number_input("Min Horizontal Radius (m)", value=230.0, step=10.0, format="%.2f")
     manual_limits['min_k_crest'] = st.sidebar.number_input("Min K-Value (Crest)", value=26.0, step=1.0, format="%.2f")
     manual_limits['min_k_sag'] = st.sidebar.number_input("Min K-Value (Sag)", value=30.0, step=1.0, format="%.2f")
 
@@ -65,15 +65,12 @@ if uploaded_file is not None:
         xml_content = uploaded_file.read()
         root = ET.fromstring(xml_content)
         
-        # Handle LandXML namespaces dynamically if present
         ns = {}
         if root.tag.startswith('{'):
             uri = root.tag.split('}')[0].strip('{')
             ns = {'ns': uri}
         
-        # Extract alignments from LandXML
         extracted_profiles = []
-        # LandXML standard tag for alignments is 'Alignment'
         alignment_elements = root.findall('.//ns:Alignment', ns) if ns else root.findall('.//Alignment')
         
         for align in alignment_elements:
@@ -87,7 +84,7 @@ if uploaded_file is not None:
         st.success(f"✅ LandXML parsed successfully! Found {len(extracted_profiles)} Alignments/Profiles.")
         
         # --- Step 1: Design Speed & Terrain Settings ---
-        st.markdown("### ⚙️ Step 1: Design Speed & Terrain Settings")
+        st.markdown("### ⚙️ Step 1: Design Speed & Criteria Settings")
         
         if criteria_mode == "Use Code Standards (AASHTO)":
             global_terrain = st.selectbox("🌍 Project Terrain Type (Applies to all profiles):", ["Level", "Rolling", "Mountainous"], index=0)
@@ -104,7 +101,13 @@ if uploaded_file is not None:
                 
                 def get_limits(profile_name):
                     std = aashto_db[global_speed]
-                    return {'max_grade': std['max_grade'][global_terrain], 'min_grade': 0.5, 'min_k_crest': std['k_crest'], 'min_k_sag': std['k_sag']}
+                    return {
+                        'max_grade': std['max_grade'][global_terrain], 
+                        'min_grade': 0.3, 
+                        'min_radius': std['min_radius'],
+                        'min_k_crest': std['k_crest'], 
+                        'min_k_sag': std['k_sag']
+                    }
             else:
                 st.info(f"💡 Assign specific AASHTO design speeds for each detected alignment:")
                 default_mapping = pd.DataFrame({
@@ -124,9 +127,15 @@ if uploaded_file is not None:
                 criteria_dict = edited_criteria.set_index('Profile Name').to_dict('index')
                 
                 def get_limits(profile_name):
-                    speed = criteria_dict.get(profile_name, {'Design Speed (km/h)': 80})['Design Speed (km/h)']
+                    speed = criteria_dict.get(profile_name, {'Design Speed (km/h)'=80})['Design Speed (km/h)'] if isinstance(criteria_dict.get(profile_name), dict) else 80
                     std = aashto_db[speed]
-                    return {'max_grade': std['max_grade'][global_terrain], 'min_grade': 0.5, 'min_k_crest': std['k_crest'], 'min_k_sag': std['k_sag']}
+                    return {
+                        'max_grade': std['max_grade'][global_terrain], 
+                        'min_grade': 0.3, 
+                        'min_radius': std['min_radius'],
+                        'min_k_crest': std['k_crest'], 
+                        'min_k_sag': std['k_sag']
+                    }
         else:
             def get_limits(profile_name):
                 return manual_limits
@@ -140,7 +149,6 @@ if uploaded_file is not None:
             raw_tangents = []
             raw_curves = []
             
-            # Populate real alignment rows based on parsed data
             for idx, prof in enumerate(extracted_profiles):
                 pvi_data.append({"Profile Name": prof, "Station": 0.00, "Type": "Start", "Status": "Pass"})
                 pvi_data.append({"Profile Name": prof, "Station": 140.50, "Type": "PVI", "Status": "Pass"})
@@ -149,7 +157,8 @@ if uploaded_file is not None:
                 raw_tangents.append({"Profile Name": prof, "Start Station": 0.00, "End Station": 140.50, "Grade (%)": 1.2})
                 raw_tangents.append({"Profile Name": prof, "Start Station": 140.50, "End Station": 338.81, "Grade (%)": 4.5})
                 
-                raw_curves.append({"Profile Name": prof, "Station": 140.50, "Curve Type": "Crest", "Actual K-Value": 35})
+                # Simulating curve check with radius & K-value
+                raw_curves.append({"Profile Name": prof, "Station": 140.50, "Curve Type": "Crest", "Actual Radius (m)": 250.0, "Actual K-Value": 35.0})
             
             df_pvi = pd.DataFrame(pvi_data)
 
@@ -170,23 +179,37 @@ if uploaded_file is not None:
             for c in raw_curves:
                 limits = get_limits(c["Profile Name"])
                 req_k = limits['min_k_crest'] if c["Curve Type"] == "Crest" else limits['min_k_sag']
-                if c["Actual K-Value"] < req_k:
-                    c["Required K-Value"] = req_k
-                    c["Status"] = f"Violation (Below {req_k})"
+                req_rad = limits['min_radius']
+                
+                c["Min Required Radius (m)"] = req_rad
+                c["Required K-Value"] = req_k
+                
+                if c["Actual K-Value"] < req_k or c["Actual Radius (m)"] < req_rad:
+                    c["Status"] = "Violation (Below Standard)"
                 else:
-                    c["Required K-Value"] = req_k
                     c["Status"] = "Pass"
                 processed_curves.append(c)
             df_curves = pd.DataFrame(processed_curves)
 
+            # --- Styled DataFrames Display ---
             with st.expander("📌 Station Control & PVI Checks", expanded=True):
-                st.dataframe(df_pvi, use_container_width=True, hide_index=True)
+                def highlight_pvi(s):
+                    if "Warning" in str(s["Status"]): return ['background-color: #fff3cd; color: #856404']*len(s)
+                    return ['background-color: #d4edda; color: #155724']*len(s)
+                st.dataframe(df_pvi.style.apply(highlight_pvi, axis=1), use_container_width=True, hide_index=True)
 
             with st.expander("📐 Slopes & Tangent Grades Checks", expanded=True):
-                st.dataframe(df_grades, use_container_width=True, hide_index=True)
+                def highlight_grades(s):
+                    if "Violation" in str(s["Status"]): return ['background-color: #f8d7da; color: #721c24']*len(s)
+                    elif "Warning" in str(s["Status"]): return ['background-color: #fff3cd; color: #856404']*len(s)
+                    return ['background-color: #d4edda; color: #155724']*len(s)
+                st.dataframe(df_grades.style.apply(highlight_grades, axis=1), use_container_width=True, hide_index=True)
 
-            with st.expander("📈 Vertical Curves & K-Values Checks", expanded=True):
-                st.dataframe(df_curves, use_container_width=True, hide_index=True)
+            with st.expander("📈 Vertical Curves, Radii & K-Values Checks", expanded=True):
+                def highlight_curves(s):
+                    if "Violation" in str(s["Status"]): return ['background-color: #f8d7da; color: #721c24']*len(s)
+                    return ['background-color: #d4edda; color: #155724']*len(s)
+                st.dataframe(df_curves.style.apply(highlight_curves, axis=1), use_container_width=True, hide_index=True)
 
             # --- Export Reports ---
             st.markdown("---")
