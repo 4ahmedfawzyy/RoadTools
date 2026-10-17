@@ -1,4 +1,5 @@
 streamlit
-python-docx
 pandas
+ezdxf
+python-docx
 streamlit-option-menu
