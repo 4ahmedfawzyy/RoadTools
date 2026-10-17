@@ -44,7 +44,6 @@ aashto_db = {
     120: {"min_radius": 750, "max_grade": {"Level": 3, "Rolling": 4, "Mountainous": 5}, "k_crest": 105, "k_sag": 73}
 }
 
-# If manual mode is selected, show global inputs in sidebar
 global_manual_limits = {}
 if criteria_mode == "Manual Custom Global Entry":
     st.sidebar.info("💡 Manual entry applies globally to all profiles in the uploaded file.")
@@ -66,64 +65,75 @@ if uploaded_file is not None:
         with open("temp.dxf", "wb") as f:
             f.write(uploaded_file.getbuffer())
         
+        # Read the DXF using ezdxf
         doc = ezdxf.readfile("temp.dxf")
-        st.success("✅ DXF File loaded successfully!")
+        msp = doc.modelspace()
+        
+        if "AUDIT_REVISION_CLOUDS" not in doc.layers:
+            doc.layers.add("AUDIT_REVISION_CLOUDS", color=1)
+            
+        st.success("✅ DXF File loaded and ready for audit!")
         
         # --- Step 1: Dynamic Profile Speed Mapping ---
-        st.markdown("### ⚙️ Step 1: Assign Design Speeds per Profile")
+        st.markdown("### ⚙️ Step 1: Design Speed & Terrain Settings")
         
-        # Simulated extraction of unique profile names from DXF
         unique_profiles = ["Main_Road_01", "Side_Road_A", "Ramp_B"]
         
         if criteria_mode == "Use Code Standards (AASHTO)":
-            st.info("💡 Assign specific AASHTO design speeds and terrain for each detected profile.")
-            default_mapping = pd.DataFrame({
-                "Profile Name": unique_profiles,
-                "Design Speed (km/h)": [80, 50, 40], # Default values
-                "Terrain Type": ["Level", "Level", "Rolling"]
-            })
             
-            edited_criteria = st.data_editor(
-                default_mapping,
-                column_config={
-                    "Design Speed (km/h)": st.column_config.SelectboxColumn(
-                        "Design Speed (km/h)",
-                        options=[20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
-                        required=True,
-                    ),
-                    "Terrain Type": st.column_config.SelectboxColumn(
-                        "Terrain Type",
-                        options=["Level", "Rolling", "Mountainous"],
-                        required=True,
-                    )
-                },
-                hide_index=True,
-                use_container_width=True
+            # 1. Global Terrain (Removed from table, applied to all)
+            global_terrain = st.selectbox("🌍 Project Terrain Type (Applies to all profiles):", ["Level", "Rolling", "Mountainous"], index=0)
+            st.write("") # Spacer
+            
+            # 2. Speed Assignment Mode (Global vs Individual)
+            speed_assignment_mode = st.radio(
+                "🚦 Design Speed Assignment Method:",
+                ["Single Global Speed for All Profiles", "Different Speed for Each Profile"],
+                horizontal=True
             )
             
-            # Create a dictionary for quick lookup during the audit
-            criteria_dict = edited_criteria.set_index('Profile Name').to_dict('index')
+            if speed_assignment_mode == "Single Global Speed for All Profiles":
+                # Only show one speed dropdown, hide the table
+                global_speed = st.selectbox("Select Global Design Speed (km/h):", [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], index=6)
+                
+                def get_limits(profile_name):
+                    std = aashto_db[global_speed]
+                    return {'max_grade': std['max_grade'][global_terrain], 'min_grade': 0.5, 'min_k_crest': std['k_crest'], 'min_k_sag': std['k_sag']}
             
-            def get_limits(profile_name):
-                speed = criteria_dict[profile_name]['Design Speed (km/h)']
-                terrain = criteria_dict[profile_name]['Terrain Type']
-                std = aashto_db[speed]
-                return {
-                    'max_grade': std['max_grade'][terrain],
-                    'min_grade': 0.5,
-                    'min_k_crest': std['k_crest'],
-                    'min_k_sag': std['k_sag']
-                }
+            else:
+                # Show table with ONLY Profile Name and Speed
+                st.info("💡 Assign specific AASHTO design speeds for each detected profile.")
+                default_mapping = pd.DataFrame({
+                    "Profile Name": unique_profiles,
+                    "Design Speed (km/h)": [80, 50, 40]
+                })
+                
+                edited_criteria = st.data_editor(
+                    default_mapping,
+                    column_config={
+                        "Design Speed (km/h)": st.column_config.SelectboxColumn("Design Speed (km/h)", options=[20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], required=True)
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+                
+                criteria_dict = edited_criteria.set_index('Profile Name').to_dict('index')
+                
+                def get_limits(profile_name):
+                    speed = criteria_dict[profile_name]['Design Speed (km/h)']
+                    std = aashto_db[speed]
+                    return {'max_grade': std['max_grade'][global_terrain], 'min_grade': 0.5, 'min_k_crest': std['k_crest'], 'min_k_sag': std['k_sag']}
         else:
             def get_limits(profile_name):
                 return global_manual_limits
 
         # --- Step 2: Run Audit ---
-        if st.button("🚀 Run Design Audit", type="primary"):
+        if st.button("🚀 Run Design Audit & Mark CAD", type="primary"):
             st.markdown("---")
             st.subheader("📊 Design Check Audit Results")
             
-            # --- PVI Checks (Independent of speed) ---
+            violation_count = 0
+            
             pvi_data = [
                 {"Profile Name": "Main_Road_01", "Station": 1000.00, "Type": "PVI", "Status": "Pass"},
                 {"Profile Name": "Main_Road_01", "Station": 1234.25, "Type": "PVI", "Status": "Warning (Not multiple of 5)"}, 
@@ -131,7 +141,6 @@ if uploaded_file is not None:
             ]
             df_pvi = pd.DataFrame(pvi_data)
 
-            # --- Slopes Checks (Dependent on per-profile speed) ---
             raw_tangents = [
                 {"Profile Name": "Main_Road_01", "Start Station": 1000, "End Station": 1234.25, "Grade (%)": 0.3}, 
                 {"Profile Name": "Main_Road_01", "Start Station": 1234.25, "End Station": 1500, "Grade (%)": 5.8},   
@@ -144,6 +153,7 @@ if uploaded_file is not None:
                 g = abs(t["Grade (%)"])
                 if g > limits['max_grade']:
                     t["Status"] = f"Violation (Exceeds Max {limits['max_grade']}%)"
+                    violation_count += 1
                 elif g < limits['min_grade']:
                     t["Status"] = f"Warning (Below Min {limits['min_grade']}%)"
                 else:
@@ -151,7 +161,6 @@ if uploaded_file is not None:
                 processed_tangents.append(t)
             df_grades = pd.DataFrame(processed_tangents)
 
-            # --- Curves Checks (Dependent on per-profile speed) ---
             raw_curves = [
                 {"Profile Name": "Main_Road_01", "Station": 1234.25, "Curve Type": "Crest", "Actual K-Value": 20},
                 {"Profile Name": "Side_Road_A", "Station": 1500.00, "Curve Type": "Sag", "Actual K-Value": 40},
@@ -165,13 +174,17 @@ if uploaded_file is not None:
                 if c["Actual K-Value"] < req_k:
                     c["Required K-Value"] = req_k
                     c["Status"] = f"Violation (Below {req_k})"
+                    violation_count += 1
                 else:
                     c["Required K-Value"] = req_k
                     c["Status"] = "Pass"
                 processed_curves.append(c)
             df_curves = pd.DataFrame(processed_curves)
 
-            # --- Display Results ---
+            # Draw Simulated Revision Cloud
+            msp.add_circle(center=(0, 0), radius=100, dxfattribs={'layer': 'AUDIT_REVISION_CLOUDS'})
+            msp.add_text(f"Audit Found {violation_count} Violations", dxfattribs={'layer': 'AUDIT_REVISION_CLOUDS', 'height': 20}).set_placement((0, 110))
+
             with st.expander("📌 PVI Stationing Checks", expanded=True):
                 def highlight_pvi(s):
                     if "Warning" in str(s["Status"]): return ['background-color: #fff3cd; color: #856404']*len(s)
@@ -193,8 +206,9 @@ if uploaded_file is not None:
 
             # --- Export Reports ---
             st.markdown("---")
-            st.subheader("📥 Export Audit Reports")
-            col_exp1, col_exp2 = st.columns(2)
+            st.subheader("📥 Export Audit Reports & Marked CAD File")
+            
+            col_exp1, col_exp2, col_exp3 = st.columns(3)
             
             report_content = f"--- Road Design Audit Report ---\n\n"
             report_content += "PVI Checks:\n" + df_pvi.to_string(index=False) + "\n\n"
@@ -202,7 +216,7 @@ if uploaded_file is not None:
             report_content += "Curve Checks:\n" + df_curves.to_string(index=False) + "\n"
             
             with col_exp1:
-                st.download_button(label="📄 Download as Text (Notepad)", data=report_content, file_name="Design_Audit_Report.txt", mime="text/plain", use_container_width=True)
+                st.download_button(label="📄 Download Text Report", data=report_content, file_name="Design_Audit_Report.txt", mime="text/plain", use_container_width=True)
                 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -231,7 +245,14 @@ if uploaded_file is not None:
 
             excel_data = output.getvalue()
             with col_exp2:
-                st.download_button(label="📊 Download as Excel (Formatted)", data=excel_data, file_name="Design_Audit_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                st.download_button(label="📊 Download Excel Report", data=excel_data, file_name="Design_Audit_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            
+            text_stream = io.StringIO()
+            doc.write(text_stream)
+            annotated_dxf_data = text_stream.getvalue()
+            
+            with col_exp3:
+                st.download_button(label="💾 Download Annotated DXF (Markups)", data=annotated_dxf_data, file_name="Annotated_Audit.dxf", mime="application/dxf", use_container_width=True)
 
     except Exception as e:
         st.error(f"Error processing DXF file: {e}")
