@@ -1,6 +1,6 @@
 streamlit
 pandas
-ezdxf
-python-docx
-streamlit-option-menu
-XlsxWriter
+shapely
+plotly
+defusedxml
+xlsxwriter
