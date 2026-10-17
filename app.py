@@ -1,4 +1,11 @@
+import json
+from pathlib import Path
+
 import streamlit as st
+
+# Edit these two lines when you publish an update
+APP_VERSION = "1.0"
+LAST_UPDATED = "17 Oct 2026"
 
 st.set_page_config(
     page_title="Road Engineering Platform",
@@ -42,7 +49,8 @@ st.markdown(
         /* Tool cards */
         .card-icon { font-size: 2.4rem; line-height: 1; margin-bottom: .45rem; }
         .card-title { font-size: 1.5rem; font-weight: 700; margin-bottom: .3rem; }
-        .card-desc { opacity: .8; font-size: .98rem; margin-bottom: .8rem; }
+        .card-desc { opacity: .8; font-size: .98rem; margin-bottom: .8rem; min-height: 3.3rem; }
+        .chips { min-height: 2.4rem; }
         .feat { list-style: none; padding: 0; margin: 0 0 1rem; }
         .feat li { padding: .22rem 0 .22rem 1.5rem; position: relative; font-size: .93rem; }
         .feat li::before { content: "✓"; position: absolute; left: 0; color: #28a745; font-weight: 700; }
@@ -62,11 +70,37 @@ st.markdown(
         .flow-title { font-weight: 600; margin-bottom: .15rem; }
         .flow-text { font-size: .86rem; opacity: .75; }
 
-        .footer { text-align: center; font-size: .8rem; opacity: .6; margin: 2.5rem 0 .5rem; }
+        button[kind="primary"], button[data-testid="stBaseButton-primary"] {
+            background-color: #2E5C9A !important; border-color: #2E5C9A !important; color: #fff !important; }
+        button[kind="primary"]:hover, button[data-testid="stBaseButton-primary"]:hover {
+            background-color: #3A70B8 !important; border-color: #3A70B8 !important; }
+        .statusbar { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem 1.5rem;
+                     border-top: 1px solid rgba(128,128,128,.3); margin-top: 2.5rem; padding-top: .9rem;
+                     font-size: .8rem; opacity: .7; }
+        .footer { text-align: center; font-size: .8rem; opacity: .6; margin: .8rem 0 .5rem; }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+# ---------------------------------------------------------------- Design code data (shared with BODR)
+ROOT = Path(__file__).resolve().parent
+SECTIONS = ("k_values", "horizontal", "turning")
+
+
+@st.cache_data(show_spinner=False)
+def load_codes():
+    out = {}
+    for f in (ROOT / "bodr_data").glob("*.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            out[d.get("code", f.stem.upper())] = d
+        except Exception:
+            pass
+    return dict(sorted(out.items(), key=lambda kv: (kv[1].get("order", 99), kv[0])))
+
+
+CODES = load_codes()
 
 # ---------------------------------------------------------------- Hero
 st.markdown(
@@ -111,7 +145,7 @@ with col1:
                 <li>Plan view with flagged intersections</li>
                 <li>Formatted Excel and text reports</li>
             </ul>
-            <span class="chip">LandXML</span><span class="chip">AASHTO</span><span class="chip">Manual limits</span>
+            <div class="chips"><span class="chip">LandXML</span><span class="chip">AASHTO</span><span class="chip">Manual limits</span></div>
             """,
             unsafe_allow_html=True,
         )
@@ -128,17 +162,54 @@ with col2:
             design values.</div>
             <ul class="feat">
                 <li>K-values by design speed</li>
+                <li>Horizontal radii by speed and superelevation</li>
                 <li>Vehicle turning radius</li>
-                <li>Typical cross-section builder</li>
-                <li>Design code tables for the chosen inputs</li>
+                <li>Design code selector: AASHTO, ADM, MOMRA</li>
                 <li>Word calculation note export</li>
             </ul>
-            <span class="chip">AASHTO</span><span class="chip">Abu Dhabi (ADM)</span><span class="chip">MOMRA</span>
+            <div class="chips"><span class="chip">AASHTO</span><span class="chip">Abu Dhabi (ADM)</span><span class="chip">MOMRA</span></div>
             """,
             unsafe_allow_html=True,
         )
         if st.button("Open BODR  →", type="primary", use_container_width=True, key="open_bodr"):
             st.switch_page("pages/2_BODR.py")
+
+# ---------------------------------------------------------------- Quick lookup
+st.markdown('<div class="section-label">Quick lookup</div>', unsafe_allow_html=True)
+with st.container(border=True):
+    avail = [c for c, d in CODES.items() if "k_values" in d or "horizontal" in d]
+    if not avail:
+        st.info("No design code tables found. Add the `bodr_data` folder to the repository to enable the quick lookup.")
+    else:
+        q1, q2, q3 = st.columns(3)
+        qcode = q1.selectbox("Design code", avail, key="q_code")
+        d = CODES[qcode]
+        kv, hz = d.get("k_values"), d.get("horizontal")
+        speeds = sorted({*(kv["speeds"] if kv else []), *([int(s) for s in hz["radii"]] if hz else [])})
+        qspeed = q2.selectbox("Design speed (km/h)", speeds, index=speeds.index(100) if 100 in speeds else 0,
+                              key=f"q_speed_{qcode}")
+        e_list = hz["e"] if hz else []
+        qe = q3.selectbox("Superelevation e (%)", e_list or ["-"],
+                          index=e_list.index(0.0) if 0.0 in e_list else 0,
+                          key=f"q_e_{qcode}", disabled=not e_list)
+
+        crest = sag = rad = None
+        if kv and qspeed in kv["speeds"]:
+            i = kv["speeds"].index(qspeed)
+            crest, sag = kv["crest"][i], kv["sag"][i]
+        if hz and str(qspeed) in hz["radii"] and qe in hz["e"]:
+            rad = hz["radii"][str(qspeed)][hz["e"].index(qe)]
+
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Min K · crest", "-" if crest is None else crest)
+        r2.metric("Min K · sag", "-" if sag is None else sag)
+        r3.metric("Min radius (m)", "-" if rad is None else rad)
+        notes = []
+        if kv:
+            notes.append(f"K values: {kv.get('source', '')}")
+        if hz:
+            notes.append(f"Radius: {hz.get('source', '')}, {hz.get('title', '')}")
+        st.caption(" · ".join(notes) + ". A dash means the selected code table does not cover this speed.")
 
 # ---------------------------------------------------------------- Workflow
 st.markdown('<div class="section-label">How Design Checks works</div>', unsafe_allow_html=True)
@@ -158,7 +229,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+loaded = " · ".join(
+    f"{c} ({sum(1 for k in SECTIONS if k in d)}/{len(SECTIONS)} tables)" for c, d in CODES.items()
+) or "none loaded"
 st.markdown(
-    '<div class="footer">Results are preliminary and must be verified against the governing design code.</div>',
+    f'''
+    <div class="statusbar">
+        <span>Version {APP_VERSION} · Updated {LAST_UPDATED}</span>
+        <span>Design codes: {loaded}</span>
+    </div>
+    <div class="footer">Results are preliminary and must be verified against the governing design code.</div>
+    ''',
     unsafe_allow_html=True,
 )
