@@ -116,37 +116,62 @@ def highlight(df, row_mask, strong_cols=()):
 
 
 # ----------------------------------------------------------------------------
-# Typical cross section: geometry and drawing
+# Typical cross section (urban): geometry and drawing
 # ----------------------------------------------------------------------------
 SEG_COLORS = {"lane": "#4a4a4a", "shoulder": "#9a9a9a", "median": "#5aa85a", "footpath": "#d8c27a",
-              "verge": "#7cb342", "slope": "#a8754a", "kerb": "#222222"}
+              "verge": "#7cb342", "parking": "#6f7f8f", "kerb": "#222222"}
+PAVED = {"lane", "shoulder", "parking"}
+BASE_COLOR, SUBBASE_COLOR, SUBGRADE_COLOR = "#8d7f6f", "#b8a98f", "#d6cdbb"
+CAR_COLORS = ["#e74c3c", "#3498db", "#ecf0f1", "#f1c40f", "#95a5a6"]
+
+
+def lane_style(name):
+    """Colour and vehicle from the lane name (e.g. 'Bus lane' is red with a bus, 'Cycle lane' is green)."""
+    n = name.lower()
+    if "bus" in n:
+        return "#a63d2f", "bus"
+    if "bike" in n or "cycl" in n:
+        return "#2f8f5b", None
+    return SEG_COLORS["lane"], "car"
 
 
 def _side_elements(side, p):
-    """Elements from the centre outward: (name, kind, width, cross-fall % falling outward, kerb rise)."""
+    """Elements from the centre outward as dicts."""
     els = []
+
+    def add(name, kind, width, slope, kerb=0.0, **extra):
+        els.append(dict(name=name, kind=kind, width=width, slope=slope, kerb=kerb, **extra))
+
     if p["divided"] and side["inner_sh"] > 0:
-        els.append(("Inner shoulder", "shoulder", side["inner_sh"], p["ss"], 0.0))
+        add("Inner shoulder", "shoulder", side["inner_sh"], p["ss"])
+    names = side.get("lane_names") or []
     for i, lw in enumerate(side["lane_widths"]):
-        els.append((f"Lane {i + 1}", "lane", lw, p["sc"], 0.0))
+        nm = (names[i].strip() if i < len(names) and names[i].strip() else f"Lane {i + 1}")
+        color, vehicle = lane_style(nm)
+        add(nm, "lane", lw, p["sc"], color=color, vehicle=vehicle)
+    par = side.get("parking") or {"type": "None", "width": 0.0}
+    if par["type"] != "None" and par["width"] > 0:
+        add(f"{par['type']} parking", "parking", par["width"], p["sc"], sub=par["type"].lower())
     if side["outer_sh"] > 0:
-        els.append(("Outer shoulder", "shoulder", side["outer_sh"], p["ss"], 0.0))
+        add("Outer shoulder", "shoulder", side["outer_sh"], p["ss"])
     if side["footpath"] > 0:
-        els.append(("Footpath", "footpath", side["footpath"], -p["sf"], p["kerb"]))  # falls toward the road
+        add("Footpath", "footpath", side["footpath"], -p["sf"], p["kerb"])  # falls toward the road
     if side["verge"] > 0:
-        els.append(("Verge", "verge", side["verge"], p["sf"], 0.0))
+        add("Verge", "verge", side["verge"], p["sf"])
     return els
 
 
 def _build_side(side, p, x0):
     segs, x, y = [], x0, 0.0
-    for name, kind, w, slope, kerb in _side_elements(side, p):
-        if kerb:
-            segs.append(dict(name="Kerb", kind="kerb", x0=x, y0=y, x1=x, y1=y + kerb, width=0.0, slope=None))
-            y += kerb
-        y1 = y - slope / 100 * w
-        segs.append(dict(name=name, kind=kind, x0=x, y0=y, x1=x + w, y1=y1, width=w, slope=slope))
-        x, y = x + w, y1
+    for e in _side_elements(side, p):
+        if e["kerb"]:
+            segs.append(dict(name="Kerb", kind="kerb", x0=x, y0=y, x1=x, y1=y + e["kerb"], width=0.0, slope=None))
+            y += e["kerb"]
+        y1 = y - e["slope"] / 100 * e["width"]
+        seg = {k: v for k, v in e.items() if k != "kerb"}
+        seg.update(x0=x, y0=y, x1=x + e["width"], y1=y1)
+        segs.append(seg)
+        x, y = x + e["width"], y1
     return segs
 
 
@@ -172,11 +197,18 @@ def section_totals(segs):
         "lanes": sum(1 for s in segs if s["kind"] == "lane"),
         "carriageway": w({"lane"}),
         "paved": w({"lane", "shoulder"}),
+        "parking": w({"parking"}),
         "median": w({"median"}),
         "footpath": w({"footpath"}),
-        "formation": w({"lane", "shoulder", "median", "footpath", "verge"}),
         "overall": w(set(SEG_COLORS) - {"kerb"}),
     }
+
+
+def layer_list(layers):
+    """[(label, thickness_mm)] for the layers that exist (thickness > 0)."""
+    layers = layers or {}
+    return [(lab, layers.get(k, 0)) for k, lab in (("asphalt", "Asphalt"), ("base", "Base"), ("subbase", "Subbase"))
+            if layers.get(k, 0) > 0]
 
 
 def crossfall_text(s):
@@ -185,10 +217,51 @@ def crossfall_text(s):
     return f"{abs(s['slope']):.1f} (to road)" if s["kind"] == "footpath" else f"{s['slope']:.1f}"
 
 
-def draw_section(segs, ve=3.0):
-    """2D sketch (matplotlib). Heights are exaggerated by `ve` for readability."""
-    fig = plt.figure(figsize=(12, 5.4))
-    gs = fig.add_gridspec(2, 1, height_ratios=[2.0, 1.6], hspace=0.04)
+# ---- 2D vehicles (true proportions, drawn end-on or from the side) ----------
+def _vehicle_end(ax, xc, yb, kind, front, color):
+    from matplotlib.patches import Polygon, Rectangle
+    z = 5
+    if kind == "bus":
+        w = 2.5
+        ax.add_patch(Rectangle((xc - w / 2, yb + 0.35), w, 2.65, fc=color, ec="black", lw=0.6, zorder=z))
+        ax.add_patch(Rectangle((xc - w / 2 + 0.15, yb + 1.5), w - 0.3, 1.1, fc="#cfe8f7", ec="black", lw=0.4, zorder=z + 1))
+        ly = yb + 0.6
+    else:
+        w = 1.8
+        ax.add_patch(Rectangle((xc - w / 2, yb + 0.25), w, 0.7, fc=color, ec="black", lw=0.6, zorder=z))
+        ax.add_patch(Polygon([(xc - 0.7, yb + 0.95), (xc + 0.7, yb + 0.95), (xc + 0.55, yb + 1.45),
+                              (xc - 0.55, yb + 1.45)], fc=color, ec="black", lw=0.6, zorder=z))
+        ax.add_patch(Polygon([(xc - 0.55, yb + 1.0), (xc + 0.55, yb + 1.0), (xc + 0.45, yb + 1.38),
+                              (xc - 0.45, yb + 1.38)], fc="#cfe8f7", ec="black", lw=0.3, zorder=z + 1))
+        ly = yb + 0.5
+    for sx in (-1, 1):
+        ax.add_patch(Rectangle((xc + sx * w / 2 - (0.3 if sx > 0 else 0), yb), 0.3, 0.5, fc="#111111", zorder=z + 1))
+        ax.add_patch(Rectangle((xc + sx * (w / 2 - 0.35) - 0.15, ly), 0.3, 0.16,
+                               fc="#fff3a0" if front else "#ff3b30", ec="black", lw=0.2, zorder=z + 2))
+
+
+def _vehicle_side(ax, xc, yb, length, color):
+    from matplotlib.patches import Circle, Polygon, Rectangle
+    k = length / 4.5
+    z = 5
+    ax.add_patch(Rectangle((xc - 2.25 * k, yb + 0.3), 4.5 * k, 0.7, fc=color, ec="black", lw=0.6, zorder=z))
+    ax.add_patch(Polygon([(xc - 1.0 * k, yb + 1.0), (xc + 0.9 * k, yb + 1.0), (xc + 0.5 * k, yb + 1.5),
+                          (xc - 0.7 * k, yb + 1.5)], fc=color, ec="black", lw=0.6, zorder=z))
+    ax.add_patch(Polygon([(xc - 0.8 * k, yb + 1.05), (xc + 0.75 * k, yb + 1.05), (xc + 0.45 * k, yb + 1.42),
+                          (xc - 0.6 * k, yb + 1.42)], fc="#cfe8f7", ec="black", lw=0.3, zorder=z + 1))
+    for dx in (-1.4, 1.4):
+        ax.add_patch(Circle((xc + dx * k, yb + 0.32), 0.32, fc="#111111", ec="#777777", lw=0.5, zorder=z + 1))
+
+
+def draw_section(segs, ve=3.0, layers=None, vehicles=True):
+    """2D sketch (matplotlib). Heights of the ground and layers are exaggerated by `ve`; vehicles are not."""
+    from matplotlib.patches import Patch
+    layers = layers or {}
+    ta, tb, tsb = (layers.get(k, 0) / 1000 for k in ("asphalt", "base", "subbase"))
+    thick = ta + tb + tsb
+
+    fig = plt.figure(figsize=(12, 5.6))
+    gs = fig.add_gridspec(2, 1, height_ratios=[2.1, 1.6], hspace=0.04)
     ax, lab = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
 
     xmin = min(min(s["x0"], s["x1"]) for s in segs)
@@ -196,31 +269,60 @@ def draw_section(segs, ve=3.0):
     total = max(xmax - xmin, 1e-6)
     ymin = min(min(s["y0"], s["y1"]) for s in segs)
     ymax = max(max(s["y0"], s["y1"]) for s in segs)
-    yb = (ymin - 0.45) * ve  # base of the (illustrative) pavement body
+    yb = (ymin - max(thick, 0.45) - 0.25) * ve  # bottom of the drawing
 
     for s in segs:
         if s["kind"] == "kerb":
             continue
-        ax.fill([s["x0"], s["x1"], s["x1"], s["x0"]], [s["y0"] * ve, s["y1"] * ve, yb, yb],
-                color=SEG_COLORS[s["kind"]], lw=0)
+        xs_ = [s["x0"], s["x1"], s["x1"], s["x0"]]
+        top0, top1 = s["y0"] * ve, s["y1"] * ve
+        col = s.get("color") or SEG_COLORS[s["kind"]]
+        if s["kind"] in PAVED and thick > 0:
+            ax.fill(xs_, [top0, top1, yb, yb], color=SUBGRADE_COLOR, lw=0)
+            for t, c in ((ta, col), (tb, BASE_COLOR), (tsb, SUBBASE_COLOR)):
+                if t <= 0:
+                    continue
+                b0, b1 = top0 - t * ve, top1 - t * ve
+                ax.fill(xs_, [top0, top1, b1, b0], color=c, lw=0)
+                top0, top1 = b0, b1
+        else:
+            ax.fill(xs_, [top0, top1, yb, yb], color=col, lw=0)
+
     pts = [(segs[0]["x0"], segs[0]["y0"])] + [(s["x1"], s["y1"]) for s in segs]
-    ax.plot([p[0] for p in pts], [p[1] * ve for p in pts], color="black", lw=1.6)
+    ax.plot([p[0] for p in pts], [p[1] * ve for p in pts], color="black", lw=1.6, zorder=4)
 
     for a, b in zip(segs, segs[1:]):  # lane dividers
         if a["kind"] == "lane" and b["kind"] == "lane":
-            ax.plot([a["x1"]] * 2, [a["y1"] * ve, yb], ls=":", color="white", lw=0.9)
+            ax.plot([a["x1"]] * 2, [a["y1"] * ve, a["y1"] * ve - max(ta, 0.15) * ve], ls=":", color="white", lw=0.9, zorder=4)
     if not any(s["kind"] == "median" for s in segs):
         ax.annotate("CL", (0, 0), xytext=(0, 9), textcoords="offset points", ha="center", fontsize=8)
 
-    for s in segs:  # cross-fall labels
-        if s["slope"] is not None and s["kind"] != "median" and s["width"] / total > 0.04:
-            ax.annotate(f"{abs(s['slope']):.1f}%", ((s["x0"] + s["x1"]) / 2, (s["y0"] + s["y1"]) / 2 * ve),
-                        xytext=(0, 6), textcoords="offset points", ha="center", fontsize=7, color="#333333")
+    has_vehicle = False
+    if vehicles:
+        n_car = 0
+        for s in segs:
+            xc, yb_s = (s["x0"] + s["x1"]) / 2, (s["y0"] + s["y1"]) / 2 * ve
+            front = xc < 0  # right-hand traffic: left side comes toward the viewer
+            if s["kind"] == "lane" and s.get("vehicle"):
+                _vehicle_end(ax, xc, yb_s, s["vehicle"], front, CAR_COLORS[n_car % len(CAR_COLORS)])
+                n_car, has_vehicle = n_car + 1, True
+            elif s["kind"] == "parking" and s.get("sub") == "parallel" and s["width"] >= 1.9:
+                _vehicle_end(ax, xc, yb_s, "car", front, CAR_COLORS[n_car % len(CAR_COLORS)])
+                n_car, has_vehicle = n_car + 1, True
+            elif s["kind"] == "parking" and s.get("sub") == "perpendicular" and s["width"] >= 3.0:
+                _vehicle_side(ax, xc, yb_s, min(4.5, s["width"] * 0.92), CAR_COLORS[n_car % len(CAR_COLORS)])
+                n_car, has_vehicle = n_car + 1, True
 
-    ax.plot([xmin - 0.03 * total, xmax + 0.03 * total], [yb - 0.02 * total, ymax * ve + 0.06 * total],
-            alpha=0)  # invisible points that set the drawing extent
+    top = ymax * ve + (3.8 if has_vehicle else 0.06 * total)
+    ax.plot([xmin - 0.03 * total, xmax + 0.03 * total], [yb - 0.02 * total, top], alpha=0)  # sets the extent
     ax.set_aspect("equal", adjustable="datalim")
     ax.axis("off")
+    if thick > 0:
+        handles = [Patch(color="#4a4a4a", label=f"Asphalt {layers['asphalt']:g} mm")] if ta > 0 else []
+        handles += [Patch(color=BASE_COLOR, label=f"Base {layers['base']:g} mm")] if tb > 0 else []
+        handles += [Patch(color=SUBBASE_COLOR, label=f"Subbase {layers['subbase']:g} mm")] if tsb > 0 else []
+        handles.append(Patch(color=SUBGRADE_COLOR, label="Subgrade"))
+        ax.legend(handles=handles, loc="upper right", fontsize=7, frameon=False)
     fig.canvas.draw()
 
     lab.set_xlim(ax.get_xlim())
@@ -230,30 +332,52 @@ def draw_section(segs, ve=3.0):
         if s["kind"] == "kerb" or s["width"] <= 0.01:
             continue
         xm = (s["x0"] + s["x1"]) / 2
+        fall = f"{abs(s['slope']):.1f}%" if s["slope"] is not None and s["kind"] != "median" else ""
         if s["width"] / total < 0.0075 * len(s["name"]):  # long names on narrow elements are rotated
-            lab.text(xm, 0.98, f"{s['name']}  {s['width']:.2f}", ha="center", va="top", rotation=90, fontsize=7)
+            lab.text(xm, 0.98, f"{s['name']}  {s['width']:.2f}  {fall}".strip(), ha="center", va="top",
+                     rotation=90, fontsize=7)
         else:
-            lab.text(xm, 0.98, f"{s['name']}\n{s['width']:.2f} m", ha="center", va="top", fontsize=8)
-    fx = [s for s in segs if s["kind"] not in ("slope", "kerb")]
-    fmin, fmax = min(min(s["x0"], s["x1"]) for s in fx), max(max(s["x0"], s["x1"]) for s in fx)
-    if abs((fmax - fmin) - total) > 0.01:
-        lab.annotate("", xy=(fmin, 0.33), xytext=(fmax, 0.33), arrowprops=dict(arrowstyle="<->", lw=1, color="#1F3864"))
-        lab.text((fmin + fmax) / 2, 0.26, f"Formation width {fmax - fmin:.2f} m", ha="center", va="top",
-                 fontsize=8, color="#1F3864")
+            lab.text(xm, 0.98, f"{s['name']}\n{s['width']:.2f} m" + (f"\n{fall}" if fall else ""),
+                     ha="center", va="top", fontsize=8)
     lab.annotate("", xy=(xmin, 0.13), xytext=(xmax, 0.13), arrowprops=dict(arrowstyle="<->", lw=1.2))
-    lab.text((xmin + xmax) / 2, 0.07, f"Overall width {total:.2f} m", ha="center", va="top", fontsize=9, weight="bold")
-    fig.suptitle(f"Typical cross section · heights exaggerated x{ve:g}", fontsize=9, y=0.93)
+    lab.text((xmin + xmax) / 2, 0.07, f"Total width {total:.2f} m", ha="center", va="top", fontsize=9, weight="bold")
+    fig.suptitle(f"Typical cross section · ground and layers exaggerated x{ve:g}", fontsize=9, y=0.93)
     return fig
 
 
-def make_3d(segs, ve=3.0, length=30.0):
+# ---- 3D ---------------------------------------------------------------------
+_BI = [0, 0, 4, 4, 0, 0, 3, 3, 0, 0, 1, 1]
+_BJ = [1, 2, 5, 6, 1, 5, 2, 6, 3, 7, 2, 6]
+_BK = [2, 3, 6, 7, 5, 4, 6, 7, 7, 4, 6, 5]
+
+
+def _box(x0, x1, y0, y1, z0, z1, color):
+    return go.Mesh3d(x=[x0, x1, x1, x0, x0, x1, x1, x0], y=[y0, y0, y1, y1, y0, y0, y1, y1],
+                     z=[z0, z0, z0, z0, z1, z1, z1, z1], i=_BI, j=_BJ, k=_BK, color=color,
+                     flatshading=True, hoverinfo="skip", showlegend=False)
+
+
+def make_3d(segs, ve=3.0, layers=None, vehicles=True, length=30.0):
+    layers = layers or {}
+    ta, tb, tsb = (layers.get(k, 0) / 1000 for k in ("asphalt", "base", "subbase"))
     fig = go.Figure()
     for s in segs:
+        col = s.get("color") or SEG_COLORS[s["kind"]]
         fig.add_trace(go.Mesh3d(
             x=[s["x0"], s["x1"], s["x1"], s["x0"]], y=[0, 0, length, length],
             z=[s["y0"] * ve, s["y1"] * ve, s["y1"] * ve, s["y0"] * ve],
-            i=[0, 0], j=[1, 2], k=[2, 3], color=SEG_COLORS[s["kind"]], flatshading=True,
+            i=[0, 0], j=[1, 2], k=[2, 3], color=col, flatshading=True,
             hoverinfo="text", hovertext=f"{s['name']}: {s['width']:.2f} m", showlegend=False))
+        if s["kind"] in PAVED and s["kind"] != "kerb":  # layers on the front face
+            top0, top1 = s["y0"] * ve, s["y1"] * ve
+            for t, c in ((ta, "#2b2b2b"), (tb, BASE_COLOR), (tsb, SUBBASE_COLOR)):
+                if t <= 0:
+                    continue
+                b0, b1 = top0 - t * ve, top1 - t * ve
+                fig.add_trace(go.Mesh3d(x=[s["x0"], s["x1"], s["x1"], s["x0"]], y=[0, 0, 0, 0],
+                                        z=[top0, top1, b1, b0], i=[0, 0], j=[1, 2], k=[2, 3], color=c,
+                                        flatshading=True, hoverinfo="skip", showlegend=False))
+                top0, top1 = b0, b1
     for a, b in zip(segs, segs[1:]):  # lane dividers
         if a["kind"] == "lane" and b["kind"] == "lane":
             z = a["y1"] * ve + 0.01
@@ -264,6 +388,25 @@ def make_3d(segs, ve=3.0, length=30.0):
     pz = [segs[0]["y0"] * ve] + [s["y1"] * ve for s in segs]
     fig.add_trace(go.Scatter3d(x=px, y=[0] * len(px), z=pz, mode="lines", line=dict(color="black", width=4),
                                hoverinfo="skip", showlegend=False))
+    if vehicles:  # simple box vehicles at true size
+        n = 0
+        for s in segs:
+            xc, zb = (s["x0"] + s["x1"]) / 2, (s["y0"] + s["y1"]) / 2 * ve
+            yc = 6 + 12 * (n % 2)
+            color = CAR_COLORS[n % len(CAR_COLORS)]
+            if s["kind"] == "lane" and s.get("vehicle") == "bus":
+                fig.add_trace(_box(xc - 1.25, xc + 1.25, yc - 5.5, yc + 5.5, zb + 0.3, zb + 3.1, color))
+            elif (s["kind"] == "lane" and s.get("vehicle") == "car") or (
+                    s["kind"] == "parking" and s.get("sub") == "parallel" and s["width"] >= 1.9):
+                fig.add_trace(_box(xc - 0.9, xc + 0.9, yc - 2.25, yc + 2.25, zb + 0.25, zb + 0.95, color))
+                fig.add_trace(_box(xc - 0.7, xc + 0.7, yc - 1.2, yc + 1.2, zb + 0.95, zb + 1.45, "#cfe8f7"))
+            elif s["kind"] == "parking" and s.get("sub") == "perpendicular" and s["width"] >= 3.0:
+                half = min(2.25, s["width"] * 0.46)
+                fig.add_trace(_box(xc - half, xc + half, yc - 0.9, yc + 0.9, zb + 0.25, zb + 0.95, color))
+                fig.add_trace(_box(xc - half * 0.6, xc + half * 0.4, yc - 0.7, yc + 0.7, zb + 0.95, zb + 1.45, "#cfe8f7"))
+            else:
+                continue
+            n += 1
     fig.update_layout(height=520, margin=dict(l=0, r=0, t=10, b=0),
                       scene=dict(aspectmode="data", xaxis_title="Offset (m)",
                                  yaxis=dict(visible=False), zaxis=dict(visible=False),
@@ -449,7 +592,13 @@ def build_docx(items, codes, project="", prepared_by=""):
             _table(doc, ["Lanes", "Carriageway (m)", "Paved incl. shoulders (m)", "Total width (m)"],
                    [[tot["lanes"], f"{tot['carriageway']:.2f}", f"{tot['paved']:.2f}", f"{tot['overall']:.2f}"]])
             doc.add_paragraph()
-            fig = draw_section(segs, it["params"]["ve"])
+            lay = layer_list(it["params"].get("layers"))
+            if lay:
+                _table(doc, ["Pavement layer", "Thickness (mm)"], [[lab, f"{t:g}"] for lab, t in lay]
+                       + [["Total", f"{sum(t for _, t in lay):g}"]])
+                doc.add_paragraph()
+            fig = draw_section(segs, it["params"]["ve"], it["params"].get("layers"),
+                               it["params"].get("vehicles", True))
             buf = io.BytesIO()
             fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
             plt.close(fig)
@@ -602,7 +751,8 @@ with tab_t:
 with tab_x:
     st.caption("Urban typical cross section. The sketch updates as you change the inputs. "
                "Widths in metres, cross-falls in % (positive = falls away from the centre). "
-               "Lane 1 is the lane nearest the centre line or median.")
+               "Lane 1 is the lane nearest the centre line or median. "
+               "Name a lane 'Bus lane' or 'Cycle lane' and it gets its own colour and vehicle.")
     col_in, col_out = st.columns([1, 1.5], gap="large")
 
     with col_in:
@@ -616,37 +766,52 @@ with tab_x:
             with st.expander(label, expanded=expanded):
                 n = int(st.number_input("Number of lanes", 1, 6, 2, 1, key=f"xs_{key}_lanes"))
                 same = st.checkbox("Same width for all lanes", value=True, key=f"xs_{key}_same")
-                if same:
-                    w = st.number_input("Lane width (m)", 2.5, 5.0, 3.5, 0.05, key=f"xs_{key}_lw")
-                    widths = [w] * n
-                else:
-                    widths, cols = [], st.columns(2)
-                    for i in range(n):
-                        widths.append(cols[i % 2].number_input(f"Lane {i + 1} width (m)", 2.5, 5.0, 3.5, 0.05,
-                                                               key=f"xs_{key}_lw{i}"))
+                common = st.number_input("Lane width (m)", 2.5, 5.0, 3.5, 0.05, key=f"xs_{key}_lw",
+                                         disabled=not same)
+                names, widths = [], []
+                for i in range(n):
+                    c1, c2 = st.columns([3, 2])
+                    names.append(c1.text_input(f"Lane {i + 1} name", f"Lane {i + 1}", key=f"xs_{key}_ln{i}"))
+                    if same:
+                        widths.append(common)
+                    else:
+                        widths.append(c2.number_input(f"Lane {i + 1} width (m)", 2.5, 5.0, 3.5, 0.05,
+                                                      key=f"xs_{key}_lw{i}"))
+                ptype = st.selectbox("Parking", ["None", "Parallel", "Perpendicular"], key=f"xs_{key}_ptype")
+                pwidth = st.number_input("Parking width / depth (m)", 1.0, 8.0, 2.5 if ptype != "Perpendicular" else 5.0,
+                                         0.1, key=f"xs_{key}_pw_{ptype}", disabled=ptype == "None")
                 inner = st.number_input("Inner shoulder (m)", 0.0, 6.0, 0.0, 0.1, key=f"xs_{key}_in",
                                         disabled=not divided)
-                outer = st.number_input("Outer shoulder / parking (m)", 0.0, 6.0, 0.0, 0.1, key=f"xs_{key}_out")
+                outer = st.number_input("Outer shoulder (m)", 0.0, 6.0, 0.0, 0.1, key=f"xs_{key}_out")
                 foot = st.number_input("Footpath (m)", 0.0, 8.0, 2.0, 0.1, key=f"xs_{key}_foot")
                 verge = st.number_input("Verge / landscape strip (m)", 0.0, 10.0, 0.0, 0.1, key=f"xs_{key}_verge")
-            return {"lane_widths": [float(x) for x in widths], "inner_sh": inner, "outer_sh": outer,
-                    "footpath": foot, "verge": verge}
+            return {"lane_widths": [float(x) for x in widths], "lane_names": names,
+                    "parking": {"type": ptype, "width": float(pwidth) if ptype != "None" else 0.0},
+                    "inner_sh": inner, "outer_sh": outer, "footpath": foot, "verge": verge}
 
         right_side = side_inputs("Right side", "r", True)
         left_side = right_side if mirror else side_inputs("Left side", "l", True)
 
+        with st.expander("Pavement layers (set 0 if a layer does not exist)", expanded=False):
+            t_asp = st.number_input("Asphalt thickness (mm)", 0, 1000, 100, 10, key="xs_asp")
+            t_base = st.number_input("Base thickness (mm)", 0, 1500, 200, 10, key="xs_base")
+            t_sub = st.number_input("Subbase thickness (mm)", 0, 1500, 300, 10, key="xs_sub")
+            st.caption("Layers are drawn under lanes, shoulders and parking. Values are placeholders, not from a design code.")
+
         with st.expander("Cross-falls", expanded=False):
-            sc = st.number_input("Carriageway cross-fall (%)", 0.0, 8.0, 2.0, 0.1, key="xs_sc")
+            sc = st.number_input("Carriageway and parking cross-fall (%)", 0.0, 8.0, 2.0, 0.1, key="xs_sc")
             ss = st.number_input("Shoulder cross-fall (%)", 0.0, 10.0, 2.0, 0.1, key="xs_ss")
             sf = st.number_input("Footpath / verge cross-fall (%)", 0.0, 8.0, 2.0, 0.1, key="xs_sf")
             kerb = st.number_input("Kerb height at footpath (m)", 0.0, 0.5, 0.15, 0.01, key="xs_kerb")
 
         view = st.radio("View", ["2D section", "3D view"], horizontal=True, key="xs_view")
+        vehicles = st.toggle("Show vehicles", value=True, key="xs_veh")
         ve = st.slider("Height exaggeration (display only)", 1, 10, 3, key="xs_ve")
 
+    layers = {"asphalt": int(t_asp), "base": int(t_base), "subbase": int(t_sub)}
     params = {"divided": bool(divided), "median": float(median), "mirror": bool(mirror),
               "right": right_side, "left": left_side, "sc": float(sc), "ss": float(ss), "sf": float(sf),
-              "kerb": float(kerb), "ve": int(ve)}
+              "kerb": float(kerb), "ve": int(ve), "layers": layers, "vehicles": bool(vehicles)}
     segs = build_section(params)
     tot = section_totals(segs)
 
@@ -660,15 +825,18 @@ with tab_x:
             m3.metric("Paved incl. shoulders (m)", f"{tot['paved']:.2f}")
             m4, m5, m6 = st.columns(3)
             m4.metric("Median (m)", f"{tot['median']:.2f}")
-            m5.metric("Footpaths (m)", f"{tot['footpath']:.2f}")
-            m6.metric("Total width (m)", f"{tot['overall']:.2f}")
+            m5.metric("Parking (m)", f"{tot['parking']:.2f}")
+            m6.metric("Footpaths (m)", f"{tot['footpath']:.2f}")
+            m7, m8, _ = st.columns(3)
+            m7.metric("Total width (m)", f"{tot['overall']:.2f}")
+            m8.metric("Pavement depth (mm)", f"{sum(t for _, t in layer_list(layers)):g}")
 
             if view == "2D section":
-                fig2d = draw_section(segs, ve)
+                fig2d = draw_section(segs, ve, layers, vehicles)
                 st.pyplot(fig2d, use_container_width=True)
                 plt.close(fig2d)
             else:
-                st.plotly_chart(make_3d(segs, ve), use_container_width=True)
+                st.plotly_chart(make_3d(segs, ve, layers, vehicles), use_container_width=True)
 
             with st.expander("Element table"):
                 st.dataframe(pd.DataFrame([{"Element": s["name"], "Width (m)": round(s["width"], 2),
